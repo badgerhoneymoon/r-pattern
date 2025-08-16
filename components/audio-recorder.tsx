@@ -52,16 +52,21 @@ export function AudioRecorder({
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    // Clear canvas
-    ctx.fillStyle = 'rgb(248, 250, 252)' // bg-slate-50
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
-
-    const centerY = canvas.height / 2
-
-    // Calculate timeline parameters
-    const currentTime = (Date.now() - recordingStartTimeRef.current) / 1000 // seconds since recording started
-    const timeWindow = 8 // Show 8 seconds of history (slower scrolling)
-    const pixelsPerSecond = canvas.width / timeWindow
+    // Fix DPI scaling for crisp text
+    const devicePixelRatio = window.devicePixelRatio || 1
+    const rect = canvas.getBoundingClientRect()
+    
+    // Set actual size in memory based on device pixel ratio
+    canvas.width = rect.width * devicePixelRatio
+    canvas.height = rect.height * devicePixelRatio
+    
+    // Scale the drawing context so everything draws at the correct size
+    ctx.scale(devicePixelRatio, devicePixelRatio)
+    
+    // Use CSS pixels for calculations
+    const displayWidth = rect.width
+    const displayHeight = rect.height
+    const centerY = displayHeight / 2
     
     // Get current audio data and add to history
     if (analyserRef.current && dataArrayRef.current) {
@@ -77,35 +82,20 @@ export function AudioRecorder({
       }
       const rms = Math.sqrt(sum / dataArray.length)
       
-      // Add to history with timestamp
+      // Add to history - NO LIMIT, just keep adding
       waveformHistoryRef.current.push(rms)
-      
-      // Keep only data within our time window (sample at ~60fps)
-      const maxHistoryLength = timeWindow * 60
-      if (waveformHistoryRef.current.length > maxHistoryLength) {
-        waveformHistoryRef.current = waveformHistoryRef.current.slice(-maxHistoryLength)
-      }
     }
 
-    // Draw time grid lines (every 2 seconds)
-    ctx.strokeStyle = 'rgb(220, 220, 220)'
-    ctx.lineWidth = 1
-    ctx.setLineDash([2, 2])
-    for (let t = 0; t <= timeWindow; t += 2) {
-      const x = t * pixelsPerSecond
-      ctx.beginPath()
-      ctx.moveTo(x, 0)
-      ctx.lineTo(x, canvas.height)
-      ctx.stroke()
-    }
-    ctx.setLineDash([])
+    // Clear canvas
+    ctx.fillStyle = 'rgb(248, 250, 252)' // bg-slate-50
+    ctx.fillRect(0, 0, displayWidth, displayHeight)
 
     // Draw center line
     ctx.strokeStyle = 'rgb(200, 200, 200)'
     ctx.lineWidth = 1
     ctx.beginPath()
     ctx.moveTo(0, centerY)
-    ctx.lineTo(canvas.width, centerY)
+    ctx.lineTo(displayWidth, centerY)
     ctx.stroke()
 
     // Draw onset detection threshold lines
@@ -115,62 +105,86 @@ export function AudioRecorder({
     ctx.setLineDash([5, 5])
     ctx.beginPath()
     ctx.moveTo(0, centerY - thresholdOffset)
-    ctx.lineTo(canvas.width, centerY - thresholdOffset)
+    ctx.lineTo(displayWidth, centerY - thresholdOffset)
     ctx.moveTo(0, centerY + thresholdOffset)
-    ctx.lineTo(canvas.width, centerY + thresholdOffset)
+    ctx.lineTo(displayWidth, centerY + thresholdOffset)
     ctx.stroke()
     ctx.setLineDash([])
 
-    // Draw waveform history
+    // Draw waveform history - ACCUMULATIVE, NO SCROLLING
     if (waveformHistoryRef.current.length > 1) {
       ctx.lineWidth = 2
       ctx.strokeStyle = 'rgb(59, 130, 246)' // blue-500
-      ctx.beginPath()
-
-      // Calculate how much of the canvas each sample should occupy
-      const totalSamples = waveformHistoryRef.current.length
-      const pixelsPerSample = canvas.width / Math.min(totalSamples, timeWindow * 60)
       
-      for (let i = 0; i < waveformHistoryRef.current.length; i++) {
-        // Position from left to right, newest samples on the right
-        const x = i * pixelsPerSample
+      // Fixed pixels per sample - when we run out of space, compress
+      const totalSamples = waveformHistoryRef.current.length
+      const maxSamplesOnScreen = displayWidth / 2 // 2 pixels per sample
+      
+      let startIndex = 0
+      let step = 1
+      
+      // If we have too many samples, skip some to fit on screen
+      if (totalSamples > maxSamplesOnScreen) {
+        step = Math.ceil(totalSamples / maxSamplesOnScreen)
+        startIndex = totalSamples - maxSamplesOnScreen * step
+      }
+      
+      ctx.beginPath()
+      let x = 0
+      
+      for (let i = Math.max(0, startIndex); i < totalSamples; i += step) {
         const amplitude = waveformHistoryRef.current[i]
-        const y = centerY - (amplitude * centerY * 0.8) // Scale amplitude to 80% of half height
+        const y = centerY - (amplitude * centerY * 0.8)
         
-        if (i === 0) {
+        if (x === 0) {
           ctx.moveTo(x, y)
         } else {
           ctx.lineTo(x, y)
         }
+        x += 2 // Fixed 2 pixels per sample
       }
-      
       ctx.stroke()
       
       // Draw positive amplitude (mirror)
       ctx.beginPath()
-      for (let i = 0; i < waveformHistoryRef.current.length; i++) {
-        const x = i * pixelsPerSample
+      x = 0
+      for (let i = Math.max(0, startIndex); i < totalSamples; i += step) {
         const amplitude = waveformHistoryRef.current[i]
         const y = centerY + (amplitude * centerY * 0.8)
         
-        if (i === 0) {
+        if (x === 0) {
           ctx.moveTo(x, y)
         } else {
           ctx.lineTo(x, y)
         }
+        x += 2
       }
       ctx.stroke()
     }
 
-    // Draw time labels (only every 2 seconds to avoid overlap)
+    // Draw time grid and labels
+    const currentTime = (Date.now() - recordingStartTimeRef.current) / 1000
+    const timePerPixel = currentTime / (waveformHistoryRef.current.length * 2) // Approximate
+    
     ctx.fillStyle = 'rgb(100, 100, 100)'
-    ctx.font = '10px monospace'
-    ctx.textAlign = 'center'
-    for (let t = 0; t <= timeWindow; t += 2) {
-      const x = t * pixelsPerSecond
-      const timeLabel = (currentTime - (timeWindow - t)).toFixed(1) + 's'
-      if (currentTime - (timeWindow - t) >= 0) {
-        ctx.fillText(timeLabel, x, canvas.height - 5)
+    ctx.font = '12px Arial' // Crisp font at correct DPI
+    ctx.textAlign = 'left'
+    
+    // Draw time labels every 100 pixels
+    for (let x = 100; x < displayWidth; x += 100) {
+      const time = x * timePerPixel
+      if (time > 0) {
+        ctx.fillText(time.toFixed(1) + 's', x, displayHeight - 8)
+        
+        // Draw grid line
+        ctx.strokeStyle = 'rgb(220, 220, 220)'
+        ctx.lineWidth = 1
+        ctx.setLineDash([2, 2])
+        ctx.beginPath()
+        ctx.moveTo(x, 0)
+        ctx.lineTo(x, displayHeight - 20)
+        ctx.stroke()
+        ctx.setLineDash([])
       }
     }
 
