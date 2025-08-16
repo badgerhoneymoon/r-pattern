@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Mic, Square, Play, Trash2, Upload, FileAudio, X, AlertCircle, RefreshCw, Headphones } from "lucide-react"
 
 interface AudioRecorderProps {
-  onRecordingComplete: (audioBlob: Blob, metronomeBPM?: number) => void
+  onRecordingComplete: (audioBlob: Blob, metronomeBPM?: number, offsetEnabled?: boolean) => void
   onFileProcessed: (audioBuffer: AudioBuffer) => void
   onStatusUpdate: (message: string, type: 'recording' | 'analyzing' | 'ready') => void
   onAnalyze: () => void
@@ -36,6 +36,7 @@ export function AudioRecorder({
   const [error, setError] = useState<string | null>(null)
   const [metronomeEnabled, setMetronomeEnabled] = useState(true)
   const [metronomeBPM, setMetronomeBPM] = useState(120)
+  const [metronomeOffset, setMetronomeOffset] = useState(false) // -1 bar offset
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([])
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
   const [isLoadingDevices, setIsLoadingDevices] = useState(false)
@@ -54,6 +55,7 @@ export function AudioRecorder({
   const currentBeatRef = useRef<number>(0)
   const metronomeBPMRef = useRef<number>(metronomeBPM)
   const metronomeEnabledRef = useRef<boolean>(metronomeEnabled)
+  const metronomeOffsetRef = useRef<boolean>(metronomeOffset)
   
   // Keep refs in sync with state
   useEffect(() => {
@@ -63,6 +65,10 @@ export function AudioRecorder({
   useEffect(() => {
     metronomeEnabledRef.current = metronomeEnabled
   }, [metronomeEnabled])
+
+  useEffect(() => {
+    metronomeOffsetRef.current = metronomeOffset
+  }, [metronomeOffset])
 
   // Load available audio input devices
   const loadAudioDevices = useCallback(async () => {
@@ -426,7 +432,7 @@ export function AudioRecorder({
 
       mediaRecorder.onstop = () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
-        onRecordingComplete(audioBlob, metronomeEnabled ? metronomeBPMRef.current : undefined)
+        onRecordingComplete(audioBlob, metronomeEnabled ? metronomeBPMRef.current : undefined, metronomeOffsetRef.current)
         
         // Clean up stream
         mediaStream.getTracks().forEach(track => track.stop())
@@ -719,11 +725,7 @@ export function AudioRecorder({
                   </div>
                 )}
                 
-                <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded-lg">
-                  <div className="text-xs text-blue-800">
-                    <span className="font-medium">💡 Pro tip:</span> Audio interfaces (like Scarlett) provide cleaner signal for better rhythm detection
-                  </div>
-                </div>
+
 
 
               </div>
@@ -853,6 +855,26 @@ export function AudioRecorder({
                     <div className="text-xs text-gray-500 mt-0.5">
                       {metronomeEnabled ? '🟢 Beat 1 (downbeat) • 🔵 Beats 2-4' : 'Click toggle to enable'}
                     </div>
+                  </div>
+                  
+                  {/* Count-in Offset Toggle */}
+                  <div className="flex items-center justify-between py-2 px-3 bg-blue-50 rounded-lg">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-blue-800">Count-in Offset</span>
+                      <span className="text-xs text-blue-600">(-1 bar)</span>
+                    </div>
+                    <button
+                      onClick={() => setMetronomeOffset(!metronomeOffset)}
+                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+                        metronomeOffset ? 'bg-blue-600' : 'bg-gray-300'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-3 w-3 transform rounded-full bg-white shadow-sm transition-transform ${
+                          metronomeOffset ? 'translate-x-5' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
                   </div>
                 </div>
               </div>
@@ -987,12 +1009,7 @@ export function AudioRecorder({
         </div>
 
 
-        
-        <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded-lg">
-          <div className="text-xs text-blue-800">
-            <strong>💡 Tip:</strong> Works with any rhythmic audio - guitar, drums, percussion, beatboxing, clapping!
-          </div>
-        </div>
+
       </CardContent>
     </Card>
   )

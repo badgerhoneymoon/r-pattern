@@ -33,7 +33,7 @@ export function GuitarRhythmAnalyzer() {
     return audioContextRef.current
   }, [])
 
-  const handleRecordingComplete = useCallback(async (audioBlob: Blob, metronomeBPM?: number) => {
+  const handleRecordingComplete = useCallback(async (audioBlob: Blob, metronomeBPM?: number, offsetEnabled?: boolean) => {
     try {
       const audioContext = initAudioContext()
       const arrayBuffer = await audioBlob.arrayBuffer()
@@ -43,7 +43,7 @@ export function GuitarRhythmAnalyzer() {
       setStatus({ message: 'Recording complete! Analyzing rhythm...', type: 'analyzing' })
       
       // Auto-analyze immediately with metronome BPM if available
-      setTimeout(() => analyzeRhythm(buffer, metronomeBPM), 100)
+      setTimeout(() => analyzeRhythm(buffer, metronomeBPM, offsetEnabled), 100)
     } catch (error) {
       console.error('Error processing audio:', error)
       setStatus({ message: 'Error processing audio recording.', type: 'ready' })
@@ -186,7 +186,7 @@ export function GuitarRhythmAnalyzer() {
     return bpm
   }, [])
 
-  const analyzeRhythm = useCallback(async (bufferToAnalyze?: AudioBuffer, metronomeBPM?: number) => {
+  const analyzeRhythm = useCallback(async (bufferToAnalyze?: AudioBuffer, metronomeBPM?: number, offsetEnabled?: boolean) => {
     const buffer = bufferToAnalyze || audioBuffer
     if (!buffer) return
 
@@ -199,7 +199,31 @@ export function GuitarRhythmAnalyzer() {
       // ALWAYS use metronome BPM when available - ignore audio estimation
       const finalBPM = metronomeBPM || 120 // Default to 120 if no metronome
       
-      console.log('🎵 DEBUGGING - metronomeBPM passed:', metronomeBPM, 'finalBPM:', finalBPM)
+      console.log('🎵 DEBUGGING - metronomeBPM passed:', metronomeBPM, 'finalBPM:', finalBPM, 'offsetEnabled:', offsetEnabled)
+      
+      // Apply -1 bar offset if enabled
+      if (offsetEnabled && finalBPM) {
+        const secondsPerBeat = 60 / finalBPM
+        const oneBarInSeconds = 4 * secondsPerBeat // 4 beats = 1 bar
+        
+        console.log('🎵 Applying -1 bar offset:', oneBarInSeconds, 'seconds')
+        console.log('🎵 Original onset times:', onsets.map(o => o.time.toFixed(3)))
+        
+        // Subtract one bar from all onset times
+        onsets.forEach(onset => {
+          onset.time -= oneBarInSeconds
+        })
+        
+        console.log('🎵 After offset onset times:', onsets.map(o => o.time.toFixed(3)))
+        
+        // Remove any onsets that became negative
+        const validOnsets = onsets.filter(onset => onset.time >= 0)
+        console.log('🎵 Filtered onsets - before:', onsets.length, 'after:', validOnsets.length)
+        
+        // Update onsets array
+        onsets.length = 0
+        onsets.push(...validOnsets)
+      }
       
       const result: AnalysisResult = {
         onsets,
