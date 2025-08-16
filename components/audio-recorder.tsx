@@ -3,7 +3,8 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Mic, Square, Play, Trash2, Upload, FileAudio, X, AlertCircle } from "lucide-react"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Mic, Square, Play, Trash2, Upload, FileAudio, X, AlertCircle, RefreshCw, Headphones } from "lucide-react"
 
 interface AudioRecorderProps {
   onRecordingComplete: (audioBlob: Blob) => void
@@ -35,6 +36,9 @@ export function AudioRecorder({
   const [error, setError] = useState<string | null>(null)
   const [metronomeEnabled, setMetronomeEnabled] = useState(true)
   const [metronomeBPM, setMetronomeBPM] = useState(120)
+  const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([])
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
+  const [isLoadingDevices, setIsLoadingDevices] = useState(false)
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
@@ -59,6 +63,36 @@ export function AudioRecorder({
   useEffect(() => {
     metronomeEnabledRef.current = metronomeEnabled
   }, [metronomeEnabled])
+
+  // Load available audio input devices
+  const loadAudioDevices = useCallback(async () => {
+    setIsLoadingDevices(true)
+    try {
+      // Request permission first
+      await navigator.mediaDevices.getUserMedia({ audio: true })
+      
+      // Get all devices
+      const devices = await navigator.mediaDevices.enumerateDevices()
+      const audioInputs = devices.filter(device => device.kind === 'audioinput')
+      
+      setAudioDevices(audioInputs)
+      
+      // Set default device if none selected
+      if (!selectedDeviceId && audioInputs.length > 0) {
+        setSelectedDeviceId(audioInputs[0].deviceId)
+      }
+    } catch (error) {
+      console.error('Error loading audio devices:', error)
+      setError('Could not access audio devices. Please grant microphone permissions.')
+    } finally {
+      setIsLoadingDevices(false)
+    }
+  }, [selectedDeviceId])
+
+  // Load devices on mount
+  useEffect(() => {
+    loadAudioDevices()
+  }, [])
 
   // Metronome click player - simple, no dependencies
   const playMetronomeClick = (isDownbeat: boolean) => {
@@ -363,14 +397,17 @@ export function AudioRecorder({
 
   const startRecording = useCallback(async () => {
     try {
-      const mediaStream = await navigator.mediaDevices.getUserMedia({ 
+      const constraints: MediaStreamConstraints = { 
         audio: {
+          deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined,
           echoCancellation: false,
           noiseSuppression: false,
           autoGainControl: false,
           sampleRate: 44100
         }
-      })
+      }
+      
+      const mediaStream = await navigator.mediaDevices.getUserMedia(constraints)
       
       setStream(mediaStream)
       audioChunksRef.current = []
@@ -435,7 +472,7 @@ export function AudioRecorder({
       console.error('Error accessing microphone:', error)
       onStatusUpdate('Error accessing microphone. Please ensure you have granted microphone permissions.', 'ready')
     }
-  }, [onRecordingComplete, onStatusUpdate, audioContext, drawWaveform])
+  }, [onRecordingComplete, onStatusUpdate, audioContext, drawWaveform, selectedDeviceId])
 
   const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
@@ -615,6 +652,148 @@ export function AudioRecorder({
           {inputMode === 'record' ? (
             /* Recording Tab */
             <div className="text-center space-y-4">
+              {/* Audio Input Device Selector */}
+              <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <Headphones className="h-4 w-4 text-blue-600" />
+                    <span className="font-medium text-gray-800">Audio Input Device</span>
+                  </div>
+                  <Button
+                    onClick={loadAudioDevices}
+                    disabled={isLoadingDevices || isRecording}
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 px-2 text-blue-600 hover:text-blue-800"
+                  >
+                    <RefreshCw className={`h-3 w-3 mr-1 ${isLoadingDevices ? 'animate-spin' : ''}`} />
+                    Refresh
+                  </Button>
+                </div>
+                
+                <Select
+                  value={selectedDeviceId}
+                  onValueChange={setSelectedDeviceId}
+                  disabled={isRecording || isLoadingDevices}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select audio input device..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {audioDevices.map(device => {
+                      const deviceName = device.label || `Microphone ${device.deviceId.slice(0, 8)}...`
+                      const isInterface = device.label?.toLowerCase().includes('scarlett') || 
+                                         device.label?.toLowerCase().includes('focusrite') ||
+                                         device.label?.toLowerCase().includes('usb') ||
+                                         device.label?.toLowerCase().includes('interface')
+                      
+                      return (
+                        <SelectItem key={device.deviceId} value={device.deviceId}>
+                          <div className="flex items-center gap-2">
+                            {isInterface ? (
+                              <div className="w-2 h-2 rounded-full bg-green-500" />
+                            ) : (
+                              <div className="w-2 h-2 rounded-full bg-blue-500" />
+                            )}
+                            <span className="truncate">
+                              {deviceName}
+                            </span>
+                            {isInterface && (
+                              <span className="text-xs text-green-600 font-medium ml-1">
+                                Interface
+                              </span>
+                            )}
+                          </div>
+                        </SelectItem>
+                      )
+                    })}
+                  </SelectContent>
+                </Select>
+                
+                {audioDevices.length === 0 && !isLoadingDevices && (
+                  <div className="flex items-center gap-2 mt-3 p-2 bg-yellow-50 border border-yellow-200 rounded-lg">
+                    <AlertCircle className="h-4 w-4 text-yellow-600 flex-shrink-0" />
+                    <span className="text-xs text-yellow-700">
+                      No audio devices found. Please grant microphone permissions and refresh.
+                    </span>
+                  </div>
+                )}
+                
+                <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded-lg">
+                  <div className="text-xs text-blue-800">
+                    <span className="font-medium">💡 Pro tip:</span> Audio interfaces (like Scarlett) provide cleaner signal for better rhythm detection
+                  </div>
+                </div>
+
+                {/* Live Input Level Monitor */}
+                {selectedDeviceId && !isRecording && (
+                  <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                    <div className="text-xs font-medium text-gray-700 mb-2">Input Level Test</div>
+                    <Button
+                      onClick={async () => {
+                        try {
+                          const testStream = await navigator.mediaDevices.getUserMedia({
+                            audio: {
+                              deviceId: { exact: selectedDeviceId },
+                              echoCancellation: false,
+                              noiseSuppression: false,
+                              autoGainControl: false
+                            }
+                          })
+                          
+                          const testContext = new AudioContext()
+                          const source = testContext.createMediaStreamSource(testStream)
+                          const analyser = testContext.createAnalyser()
+                          analyser.fftSize = 256
+                          source.connect(analyser)
+                          
+                          const dataArray = new Uint8Array(analyser.frequencyBinCount)
+                          
+                          let maxLevel = 0
+                          const checkLevel = () => {
+                            analyser.getByteFrequencyData(dataArray)
+                            let currentLevel = 0
+                            for (let i = 0; i < dataArray.length; i++) {
+                              currentLevel = Math.max(currentLevel, dataArray[i])
+                            }
+                            maxLevel = Math.max(maxLevel, currentLevel)
+                            
+                            console.log('🎸 Input level:', currentLevel, 'Max:', maxLevel)
+                            
+                            if (maxLevel > 10) {
+                              alert(`✅ Signal detected! Max level: ${maxLevel}/255\nYour guitar signal is coming through!`)
+                              testStream.getTracks().forEach(track => track.stop())
+                              testContext.close()
+                              return
+                            }
+                            
+                            if (Date.now() - startTime < 5000) {
+                              requestAnimationFrame(checkLevel)
+                            } else {
+                              alert(`❌ No signal detected after 5 seconds.\nMax level was: ${maxLevel}/255\n\nTroubleshooting:\n- Check gain knob on Focusrite\n- Ensure guitar volume is up\n- Try different input on interface\n- Check System Preferences > Sound > Input`)
+                              testStream.getTracks().forEach(track => track.stop())
+                              testContext.close()
+                            }
+                          }
+                          
+                          const startTime = Date.now()
+                          checkLevel()
+                          
+                        } catch (error) {
+                          console.error('Test failed:', error)
+                          alert('Could not access audio device. Check permissions and device selection.')
+                        }
+                      }}
+                      variant="outline"
+                      size="sm"
+                      className="w-full text-xs"
+                    >
+                      Test Input Level (Play guitar for 5 sec)
+                    </Button>
+                  </div>
+                )}
+              </div>
+
               {/* Metronome Controls - Clean Design */}
               <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
                 <div className="flex items-center justify-between mb-4">
