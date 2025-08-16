@@ -83,9 +83,15 @@ export function GuitarRhythmAnalyzer() {
       nov[i] = d > 0 ? d : 0
     }
 
-    // Sliding stats over 0.5s
+    // Gamma expansion to boost transients
+    const gamma = 1.5
+    for (let i = 0; i < nov.length; i++) {
+      if (nov[i] > 0) nov[i] = Math.pow(nov[i], gamma)
+    }
+
+    // Sliding stats over 0.5s (z-score normalization)
     const win = Math.max(1, Math.floor(sr * 0.5))
-    const thr = new Float32Array(env.length)
+    const z = new Float32Array(env.length)
     let sum = 0
     let sumSq = 0
     const buf: number[] = []
@@ -103,7 +109,7 @@ export function GuitarRhythmAnalyzer() {
       const mean = n ? sum / n : 0
       const variance = n > 1 ? Math.max(0, sumSq / n - mean * mean) : 0
       const std = Math.sqrt(variance)
-      thr[i] = mean + 0.8 * std
+      z[i] = std > 1e-12 ? (v - mean) / std : 0
     }
 
     // Peak picking with 180ms minimum separation and local refinement
@@ -112,8 +118,9 @@ export function GuitarRhythmAnalyzer() {
     let last = -minSep
     let idx = 0
     const refine = Math.floor(sr * 0.02)
-    for (let i = 1; i < nov.length - 1; i++) {
-      if (nov[i] > thr[i] && nov[i] >= nov[i - 1] && nov[i] >= nov[i + 1]) {
+    const zThresh = 0.8
+    for (let i = 1; i < z.length - 1; i++) {
+      if (z[i] > zThresh && z[i] >= z[i - 1] && z[i] >= z[i + 1]) {
         if (i - last < minSep) continue
         // refine to max envelope near the peak
         let bestI = i
@@ -195,8 +202,22 @@ export function GuitarRhythmAnalyzer() {
           strong.sort((a, b) => a.time - b.time)
         }
 
-        // merge close events using BPM if available
-        const minSepSec = metronomeBPM ? Math.max(0.12, 0.45 * (60 / (metronomeBPM * 2))) : 0.18
+        // Merge close events using adaptive min separation
+        // Prefer robust estimate from median inter-onset interval of strong peaks
+        let minSepSec = 0.18
+        if (strong.length >= 3) {
+          const times = strong.map(s => s.time)
+          const intervals: number[] = []
+          for (let i = 1; i < times.length; i++) intervals.push(times[i] - times[i - 1])
+          intervals.sort((a, b) => a - b)
+          const medianIOI = intervals[Math.floor(intervals.length / 2)]
+          if (isFinite(medianIOI) && medianIOI > 0) {
+            minSepSec = Math.max(0.18, Math.min(0.60, 0.45 * medianIOI))
+          }
+        } else if (metronomeBPM) {
+          // Fallback to BPM-informed spacing (≈ 45% of an eighth note)
+          minSepSec = Math.max(0.18, 0.45 * (60 / (metronomeBPM * 2)))
+        }
         const merged: { time: number; index: number; e: number }[] = []
         for (const o of strong) {
           if (merged.length === 0) { merged.push(o); continue }
