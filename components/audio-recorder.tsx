@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Mic, Square, Play, Trash2, Upload, FileAudio, X, AlertCircle } from "lucide-react"
+import { Mic, Square, Play, Trash2, Upload, FileAudio, X, AlertCircle, Volume2, VolumeX } from "lucide-react"
 
 interface AudioRecorderProps {
   onRecordingComplete: (audioBlob: Blob) => void
@@ -33,6 +33,8 @@ export function AudioRecorder({
   const [uploadedFile, setUploadedFile] = useState<File | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [metronomeEnabled, setMetronomeEnabled] = useState(true)
+  const [metronomeBPM, setMetronomeBPM] = useState(120)
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
@@ -43,6 +45,130 @@ export function AudioRecorder({
   const isRecordingRef = useRef<boolean>(false)
   const waveformHistoryRef = useRef<number[]>([])
   const recordingStartTimeRef = useRef<number>(0)
+  const metronomeIntervalRef = useRef<number | null>(null)
+  const metronomeAudioContextRef = useRef<AudioContext | null>(null)
+  const currentBeatRef = useRef<number>(0)
+  const metronomeBPMRef = useRef<number>(metronomeBPM)
+  const metronomeEnabledRef = useRef<boolean>(metronomeEnabled)
+  
+  // Keep refs in sync with state
+  useEffect(() => {
+    metronomeBPMRef.current = metronomeBPM
+  }, [metronomeBPM])
+  
+  useEffect(() => {
+    metronomeEnabledRef.current = metronomeEnabled
+  }, [metronomeEnabled])
+
+  // Metronome click player - simple, no dependencies
+  const playMetronomeClick = (isDownbeat: boolean) => {
+    const ctx = metronomeAudioContextRef.current
+    if (!ctx) return
+    
+    const oscillator = ctx.createOscillator()
+    const gainNode = ctx.createGain()
+    
+    oscillator.frequency.setValueAtTime(isDownbeat ? 800 : 600, ctx.currentTime)
+    oscillator.type = 'square'
+    
+    gainNode.gain.setValueAtTime(0, ctx.currentTime)
+    gainNode.gain.linearRampToValueAtTime(0.1, ctx.currentTime + 0.001)
+    gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.1)
+    
+    oscillator.connect(gainNode)
+    gainNode.connect(ctx.destination)
+    
+    oscillator.start(ctx.currentTime)
+    oscillator.stop(ctx.currentTime + 0.1)
+  }
+
+  // Start metronome - simplified version
+  const startMetronome = useCallback(() => {
+    console.log('🎵 Starting metronome', { enabled: metronomeEnabledRef.current, bpm: metronomeBPMRef.current })
+    
+    // Stop any existing metronome
+    if (metronomeIntervalRef.current) {
+      clearInterval(metronomeIntervalRef.current)
+      metronomeIntervalRef.current = null
+    }
+    
+    if (!metronomeEnabledRef.current) {
+      console.log('❌ Metronome disabled')
+      return
+    }
+    
+    // Initialize audio context
+    if (!metronomeAudioContextRef.current) {
+      metronomeAudioContextRef.current = audioContext || new (window.AudioContext || (window as unknown as typeof AudioContext))()
+    }
+    
+    // Reset beat counter
+    currentBeatRef.current = 1
+    
+    // Play first beat immediately
+    console.log('🎵 Playing first beat')
+    playMetronomeClick(true)
+    
+    // Calculate interval using ref value
+    const intervalMs = 60000 / metronomeBPMRef.current
+    console.log('🎵 Setting interval:', intervalMs, 'ms')
+    
+    // Create a simple counter that doesn't depend on closures
+    let beat = 1
+    
+    // Start the interval using window.setInterval for browser compatibility
+    const intervalId = window.setInterval(() => {
+      try {
+        beat = (beat % 4) + 1
+        currentBeatRef.current = beat
+        const isDownbeat = beat === 1
+        console.log(`🎵 Beat ${beat} (${isDownbeat ? 'DOWN' : 'reg'})`)
+        playMetronomeClick(isDownbeat)
+      } catch (error) {
+        console.error('❌ Metronome tick error:', error)
+      }
+    }, intervalMs)
+    
+    metronomeIntervalRef.current = intervalId
+    console.log('🎵 Interval started with ID:', intervalId)
+  }, [audioContext])
+
+  // Stop metronome - use window.clearInterval
+  const stopMetronome = useCallback(() => {
+    console.log('🛑 Stopping metronome, interval ID:', metronomeIntervalRef.current)
+    if (metronomeIntervalRef.current !== null) {
+      window.clearInterval(metronomeIntervalRef.current)
+      metronomeIntervalRef.current = null
+      console.log('🛑 Metronome interval cleared')
+    }
+    currentBeatRef.current = 0
+  }, [])
+  
+  // Manage metronome lifecycle with effect to handle React dev mode remounts
+  useEffect(() => {
+    // Only run metronome when recording AND enabled
+    if (isRecording && metronomeEnabled) {
+      // Start if not already running
+      if (metronomeIntervalRef.current === null) {
+        console.log('📍 Effect starting metronome (recording:', isRecording, 'enabled:', metronomeEnabled, ')')
+        startMetronome()
+      }
+    } else {
+      // Stop if running but shouldn't be
+      if (metronomeIntervalRef.current !== null) {
+        console.log('📍 Effect stopping metronome (recording:', isRecording, 'enabled:', metronomeEnabled, ')')
+        stopMetronome()
+      }
+    }
+    
+    // Cleanup on unmount or when deps change
+    return () => {
+      if (metronomeIntervalRef.current !== null) {
+        console.log('📍 Effect cleanup - stopping metronome')
+        stopMetronome()
+      }
+    }
+  }, [isRecording, metronomeEnabled, startMetronome, stopMetronome])
 
   const drawWaveform = useCallback(() => {
     if (!canvasRef.current) return
@@ -162,6 +288,39 @@ export function AudioRecorder({
       ctx.stroke()
     }
 
+    // Draw metronome beat indicators if enabled
+    if (metronomeEnabledRef.current) {
+      const currentTime = (Date.now() - recordingStartTimeRef.current) / 1000
+      const beatInterval = 60 / metronomeBPMRef.current // seconds per beat
+      const totalBeats = Math.floor(currentTime / beatInterval) + 1
+      
+      // Draw beat markers
+      for (let beat = 0; beat < totalBeats; beat++) {
+        const beatTime = beat * beatInterval
+        const x = (beatTime / currentTime) * displayWidth
+        
+        if (x >= 0 && x <= displayWidth) {
+          const isDownbeat = (beat + 1) % 4 === 1
+          
+          // Draw beat line
+          ctx.strokeStyle = isDownbeat ? 'rgb(34, 197, 94)' : 'rgb(59, 130, 246)' // green for downbeat, blue for regular
+          ctx.lineWidth = isDownbeat ? 3 : 2
+          ctx.setLineDash([])
+          ctx.beginPath()
+          ctx.moveTo(x, 0)
+          ctx.lineTo(x, displayHeight)
+          ctx.stroke()
+          
+          // Draw beat number
+          ctx.fillStyle = isDownbeat ? 'rgb(22, 163, 74)' : 'rgb(37, 99, 235)'
+          ctx.font = 'bold 14px Arial'
+          ctx.textAlign = 'center'
+          const beatInMeasure = ((beat) % 4) + 1
+          ctx.fillText(beatInMeasure.toString(), x, 20)
+        }
+      }
+    }
+
     // Draw time grid and labels
     const currentTime = (Date.now() - recordingStartTimeRef.current) / 1000
     const timePerPixel = currentTime / (waveformHistoryRef.current.length * 2) // Approximate
@@ -248,6 +407,8 @@ export function AudioRecorder({
         recordingStartTimeRef.current = Date.now()
         waveformHistoryRef.current = [] // Clear previous history
         
+        // Metronome will be started by the effect watching isRecording state
+        
         // Start real-time visualization
         console.log('🎤 Starting real-time visualization')
         
@@ -274,12 +435,15 @@ export function AudioRecorder({
       isRecordingRef.current = false
       setIsRecording(false)
       
+      // Stop metronome
+      stopMetronome()
+      
       if (animationIdRef.current) {
         cancelAnimationFrame(animationIdRef.current)
         animationIdRef.current = null
       }
     }
-  }, [])
+  }, [stopMetronome])
 
   const handleRecordClick = useCallback(() => {
     if (isRecording) {
@@ -392,6 +556,11 @@ export function AudioRecorder({
       if (animationIdRef.current) {
         cancelAnimationFrame(animationIdRef.current)
       }
+      // Only stop metronome on actual unmount
+      if (metronomeIntervalRef.current !== null) {
+        window.clearInterval(metronomeIntervalRef.current)
+        metronomeIntervalRef.current = null
+      }
     }
   }, [stream])
 
@@ -437,7 +606,125 @@ export function AudioRecorder({
         <div className="min-h-[120px]">
           {inputMode === 'record' ? (
             /* Recording Tab */
-            <div className="text-center">
+            <div className="text-center space-y-4">
+              {/* Metronome Controls */}
+              <div className="bg-gray-50 border rounded-lg p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <label className="text-sm font-medium text-gray-700">Metronome</label>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setMetronomeEnabled(!metronomeEnabled)}
+                    className={`flex items-center gap-1 ${metronomeEnabled ? 'text-green-600' : 'text-gray-400'}`}
+                  >
+                    {metronomeEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+                    {metronomeEnabled ? 'On' : 'Off'}
+                  </Button>
+                </div>
+                
+                {/* BPM Input with presets */}
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm text-gray-600 min-w-[35px]">BPM:</label>
+                    
+                    {/* Number input */}
+                    <input
+                      type="number"
+                      min="40"
+                      max="300"
+                      value={metronomeBPM}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value) || 120
+                        setMetronomeBPM(Math.min(300, Math.max(40, val)))
+                      }}
+                      className="w-16 px-2 py-1 text-center font-mono text-sm border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      disabled={isRecording}
+                    />
+                    
+                    {/* Decrease/Increase buttons */}
+                    <div className="flex gap-1">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setMetronomeBPM(Math.max(40, metronomeBPM - 5))}
+                        disabled={isRecording || metronomeBPM <= 40}
+                        className="h-7 w-7 p-0"
+                      >
+                        -5
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setMetronomeBPM(Math.max(40, metronomeBPM - 1))}
+                        disabled={isRecording || metronomeBPM <= 40}
+                        className="h-7 w-7 p-0"
+                      >
+                        -
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setMetronomeBPM(Math.min(300, metronomeBPM + 1))}
+                        disabled={isRecording || metronomeBPM >= 300}
+                        className="h-7 w-7 p-0"
+                      >
+                        +
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setMetronomeBPM(Math.min(300, metronomeBPM + 5))}
+                        disabled={isRecording || metronomeBPM >= 300}
+                        className="h-7 w-7 p-0"
+                      >
+                        +5
+                      </Button>
+                    </div>
+                    
+                    {/* Slider */}
+                    <input
+                      type="range"
+                      min="40"
+                      max="300"
+                      value={metronomeBPM}
+                      onChange={(e) => setMetronomeBPM(Number(e.target.value))}
+                      className="flex-1"
+                      disabled={isRecording}
+                    />
+                  </div>
+                  
+                  {/* Preset buttons */}
+                  <div className="flex gap-1 flex-wrap">
+                    <span className="text-xs text-gray-500">Presets:</span>
+                    {[60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 180].map(bpm => (
+                      <Button
+                        key={bpm}
+                        variant={metronomeBPM === bpm ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setMetronomeBPM(bpm)}
+                        disabled={isRecording}
+                        className="h-6 px-2 text-xs"
+                      >
+                        {bpm}
+                      </Button>
+                    ))}
+                  </div>
+                  
+                  {/* Tempo marking */}
+                  <div className="text-xs text-gray-500 text-center">
+                    {metronomeBPM < 60 && "Grave (very slow)"}
+                    {metronomeBPM >= 60 && metronomeBPM < 66 && "Largo (slow)"}
+                    {metronomeBPM >= 66 && metronomeBPM < 76 && "Adagio (slow)"}
+                    {metronomeBPM >= 76 && metronomeBPM < 108 && "Andante (walking pace)"}
+                    {metronomeBPM >= 108 && metronomeBPM < 120 && "Moderato (moderate)"}
+                    {metronomeBPM >= 120 && metronomeBPM < 156 && "Allegro (fast)"}
+                    {metronomeBPM >= 156 && metronomeBPM < 200 && "Vivace (lively)"}
+                    {metronomeBPM >= 200 && "Presto (very fast)"}
+                    {metronomeEnabled && ' • 🟢 Downbeat • 🔵 Regular beats'}
+                  </div>
+                </div>
+              </div>
+
               <Button
                 onClick={handleRecordClick}
                 size="lg"
@@ -473,7 +760,9 @@ export function AudioRecorder({
                   
                   {/* Real-time waveform */}
                   <div className="bg-slate-50 border rounded-lg p-3">
-                    <div className="text-xs text-slate-600 mb-2">Live Waveform (Red lines = onset detection threshold)</div>
+                    <div className="text-xs text-slate-600 mb-2">
+                      Live Waveform {metronomeEnabled ? '(🟢 Downbeats • 🔵 Regular beats • Red lines = onset detection)' : '(Red lines = onset detection threshold)'}
+                    </div>
                     <canvas
                       ref={canvasRef}
                       width={400}
