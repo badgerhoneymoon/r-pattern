@@ -58,109 +58,75 @@ export function GuitarRhythmAnalyzer() {
   }, [initAudioContext])
 
   const detectOnsets = useCallback((buffer: AudioBuffer): OnsetData[] => {
-    const data = buffer.getChannelData(0)
-    const sampleRate = buffer.sampleRate
-    const windowSize = 2048
-    const hopSize = 512
-    
+    const x = buffer.getChannelData(0)
+    const sr = buffer.sampleRate
+
+    // Envelope: rectify + 10ms exponential moving average (no high-pass)
+    const env = new Float32Array(x.length)
+    const tau = 0.010 // 10ms smoothing
+    const envAlpha = 1 - Math.exp(-1 / (sr * tau))
+    let envPrev = 0
+    for (let i = 0; i < x.length; i++) {
+      const rect = Math.abs(x[i])
+      envPrev = (1 - envAlpha) * envPrev + envAlpha * rect
+      env[i] = envPrev
+    }
+
+    // Sliding threshold on novelty (computed below): mean + 0.8*std over 0.5s
+
+    // Tempo-agnostic peak picking with refractory
+    // Novelty: positive difference over 15ms
+    const diffWin = Math.max(1, Math.floor(sr * 0.015))
+    const nov = new Float32Array(env.length)
+    for (let i = diffWin; i < env.length; i++) {
+      const d = env[i] - env[i - diffWin]
+      nov[i] = d > 0 ? d : 0
+    }
+
+    // Sliding stats over 0.5s
+    const win = Math.max(1, Math.floor(sr * 0.5))
+    const thr = new Float32Array(env.length)
+    let sum = 0
+    let sumSq = 0
+    const buf: number[] = []
+    for (let i = 0; i < nov.length; i++) {
+      const v = nov[i]
+      buf.push(v)
+      sum += v
+      sumSq += v * v
+      if (buf.length > win) {
+        const r = buf.shift() as number
+        sum -= r
+        sumSq -= r * r
+      }
+      const n = buf.length
+      const mean = n ? sum / n : 0
+      const variance = n > 1 ? Math.max(0, sumSq / n - mean * mean) : 0
+      const std = Math.sqrt(variance)
+      thr[i] = mean + 0.8 * std
+    }
+
+    // Peak picking with 180ms minimum separation and local refinement
+    const minSep = Math.floor(sr * 0.18)
     const onsets: OnsetData[] = []
-    let onsetIndex = 0
-    
-    // Multi-feature detection arrays
-    const energyHistory: number[] = []
-    const spectralCentroidHistory: number[] = []
-    const highFreqEnergyHistory: number[] = []
-    
-    // Pre-compute windowing function (Hann window)
-    const hannWindow = new Float32Array(windowSize)
-    for (let i = 0; i < windowSize; i++) {
-      hannWindow[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (windowSize - 1)))
-    }
-    
-    for (let i = 0; i < data.length - windowSize; i += hopSize) {
-      // Apply windowing and compute FFT-like features
-      let energy = 0
-      let spectralCentroid = 0
-      let highFreqEnergy = 0
-      let spectralFlux = 0
-      
-      // Calculate multiple features in time domain first
-      for (let j = 0; j < windowSize; j++) {
-        const sample = data[i + j] * hannWindow[j]
-        energy += sample * sample
-      }
-      energy = Math.sqrt(energy / windowSize)
-      
-      // Simplified spectral features using frequency bands
-      // Low band (fundamental): 0-500Hz equivalent
-      // High band (harmonics/attack): 2000Hz+ equivalent  
-      const lowBandStart = Math.floor(windowSize * 0.02)  // ~80Hz at 44.1kHz
-      const highBandStart = Math.floor(windowSize * 0.3)  // ~2kHz at 44.1kHz
-      
-      for (let j = 0; j < windowSize / 2; j++) {
-        const freq = (j * sampleRate) / windowSize
-        const magnitude = Math.abs(data[i + j])
-        
-        // Spectral centroid approximation
-        spectralCentroid += freq * magnitude
-        
-        // High frequency energy (attack transients)
-        if (j >= highBandStart) {
-          highFreqEnergy += magnitude * magnitude
+    let last = -minSep
+    let idx = 0
+    const refine = Math.floor(sr * 0.02)
+    for (let i = 1; i < nov.length - 1; i++) {
+      if (nov[i] > thr[i] && nov[i] >= nov[i - 1] && nov[i] >= nov[i + 1]) {
+        if (i - last < minSep) continue
+        // refine to max envelope near the peak
+        let bestI = i
+        let bestV = env[i]
+        const i0 = Math.max(0, i - refine)
+        const i1 = Math.min(env.length - 1, i + refine)
+        for (let j = i0; j <= i1; j++) {
+          if (env[j] > bestV) { bestV = env[j]; bestI = j }
         }
-      }
-      
-      spectralCentroid /= (energy + 1e-10) // Normalize
-      highFreqEnergy = Math.sqrt(highFreqEnergy)
-      
-      // Store history for comparison
-      energyHistory.push(energy)
-      spectralCentroidHistory.push(spectralCentroid)
-      highFreqEnergyHistory.push(highFreqEnergy)
-      
-      // Only start detecting after we have some history
-      if (energyHistory.length < 5) continue
-      
-      // Keep only recent history
-      if (energyHistory.length > 10) {
-        energyHistory.shift()
-        spectralCentroidHistory.shift()
-        highFreqEnergyHistory.shift()
-      }
-      
-      // Calculate moving averages for comparison
-      const recentEnergy = energyHistory.slice(-3).reduce((a, b) => a + b) / 3
-      const olderEnergy = energyHistory.slice(0, -3).reduce((a, b) => a + b) / (energyHistory.length - 3)
-      
-      const recentHighFreq = highFreqEnergyHistory.slice(-3).reduce((a, b) => a + b) / 3
-      const olderHighFreq = highFreqEnergyHistory.slice(0, -3).reduce((a, b) => a + b) / (highFreqEnergyHistory.length - 3)
-      
-      // Much stricter multi-criteria onset detection
-      const energyIncrease = recentEnergy > olderEnergy * 1.8  // Stricter energy increase
-      const highFreqIncrease = recentHighFreq > olderHighFreq * 2.2  // Much stricter transient detection
-      const absoluteThreshold = energy > 0.015  // Higher minimum energy threshold
-      
-      // Guitar-specific: look for high-frequency content increase (string attack) 
-      const hasAttackTransient = highFreqIncrease && recentHighFreq > 0.012  // Higher transient threshold
-      
-      // Combined detection - BOTH criteria must be met
-      const isOnset = energyIncrease && hasAttackTransient && absoluteThreshold
-      
-      if (isOnset) {
-        const timeInSeconds = i / sampleRate
-        
-        // Avoid detecting multiple onsets too close together (minimum 50ms apart)
-        if (onsets.length === 0 || timeInSeconds - onsets[onsets.length - 1].time > 0.05) {
-          onsets.push({
-            time: timeInSeconds,  // Keep absolute time for metronome sync
-            index: onsetIndex++
-          })
-          
-          console.log(`🎸 Onset detected at ${timeInSeconds.toFixed(3)}s - Energy: ${energy.toFixed(4)}, HighFreq: ${recentHighFreq.toFixed(4)}`)
-        }
+        onsets.push({ time: bestI / sr, index: idx++ })
+        last = i
       }
     }
-    
     return onsets
   }, [])
 
@@ -194,7 +160,56 @@ export function GuitarRhythmAnalyzer() {
     setStatus({ message: 'Analyzing rhythm pattern...', type: 'analyzing' })
 
     try {
-      const onsets = detectOnsets(buffer)
+      // 1) raw onsets
+      let onsets = detectOnsets(buffer)
+
+      // 2) refine using local energy and BPM-informed separation (no grid assumptions)
+      {
+        const sr = buffer.sampleRate
+        const data = buffer.getChannelData(0)
+        const win = Math.max(1, Math.floor(sr * 0.020)) // 20ms
+        // local energies
+        const energies = onsets.map(o => {
+          const c = Math.floor(o.time * sr)
+          const i0 = Math.max(0, c - win)
+          const i1 = Math.min(data.length - 1, c + win)
+          let sum = 0
+          for (let i = i0; i <= i1; i++) sum += Math.abs(data[i])
+          return sum / (i1 - i0 + 1)
+        })
+        // robust threshold
+        const sorted = [...energies].sort((a, b) => a - b)
+        const med = sorted[Math.floor(sorted.length / 2)] || 0
+        const devs = sorted.map(v => Math.abs(v - med)).sort((a, b) => a - b)
+        const mad = devs[Math.floor(devs.length / 2)] || 0
+        const eThresh = med + 2 * mad
+
+        // filter weak
+        const strong: { time: number; index: number; e: number }[] = []
+        onsets.forEach((o, i) => { if (energies[i] >= eThresh) strong.push({ ...o, e: energies[i] }) })
+        if (strong.length === 0 && onsets.length > 0) {
+          // fallback: keep top 8 strongest to avoid empty result
+          const tmp = onsets.map((o, i) => ({ ...o, e: energies[i] }))
+          tmp.sort((a, b) => b.e - a.e)
+          strong.push(...tmp.slice(0, Math.min(8, tmp.length)))
+          strong.sort((a, b) => a.time - b.time)
+        }
+
+        // merge close events using BPM if available
+        const minSepSec = metronomeBPM ? Math.max(0.12, 0.45 * (60 / (metronomeBPM * 2))) : 0.18
+        const merged: { time: number; index: number; e: number }[] = []
+        for (const o of strong) {
+          if (merged.length === 0) { merged.push(o); continue }
+          const last = merged[merged.length - 1]
+          if (o.time - last.time < minSepSec) {
+            // keep stronger
+            if (o.e > last.e) merged[merged.length - 1] = o
+          } else {
+            merged.push(o)
+          }
+        }
+        onsets = merged.map((m, i) => ({ time: m.time, index: i }))
+      }
       
       // ALWAYS use metronome BPM when available - ignore audio estimation
       const finalBPM = metronomeBPM || 120 // Default to 120 if no metronome
