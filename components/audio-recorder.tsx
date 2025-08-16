@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Mic, Square, Play, Trash2, Upload, FileAudio, X, AlertCircle, Volume2, VolumeX } from "lucide-react"
+import { Mic, Square, Play, Trash2, Upload, FileAudio, X, AlertCircle } from "lucide-react"
 
 interface AudioRecorderProps {
   onRecordingComplete: (audioBlob: Blob) => void
@@ -607,120 +607,131 @@ export function AudioRecorder({
           {inputMode === 'record' ? (
             /* Recording Tab */
             <div className="text-center space-y-4">
-              {/* Metronome Controls */}
-              <div className="bg-gray-50 border rounded-lg p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <label className="text-sm font-medium text-gray-700">Metronome</label>
-                  <Button
-                    variant="ghost"
-                    size="sm"
+              {/* Metronome Controls - Clean Design */}
+              <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <div className={`w-2 h-2 rounded-full ${metronomeEnabled ? 'bg-green-500 animate-pulse' : 'bg-gray-300'}`} />
+                    <span className="font-medium text-gray-800">Metronome</span>
+                  </div>
+                  <button
                     onClick={() => setMetronomeEnabled(!metronomeEnabled)}
-                    className={`flex items-center gap-1 ${metronomeEnabled ? 'text-green-600' : 'text-gray-400'}`}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+                      metronomeEnabled ? 'bg-blue-600' : 'bg-gray-200'
+                    }`}
+                    disabled={isRecording}
                   >
-                    {metronomeEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
-                    {metronomeEnabled ? 'On' : 'Off'}
-                  </Button>
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${
+                        metronomeEnabled ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
                 </div>
                 
-                {/* BPM Input with presets */}
-                <div className="space-y-3">
-                  <div className="flex items-center gap-2">
-                    <label className="text-sm text-gray-600 min-w-[35px]">BPM:</label>
+                {/* BPM Display and Controls */}
+                <div className="space-y-4">
+                  <div className="flex items-center justify-center gap-1">
+                    {/* -5 button */}
+                    <button
+                      onClick={() => setMetronomeBPM(Math.max(40, metronomeBPM - 5))}
+                      disabled={isRecording || metronomeBPM <= 40}
+                      className="h-8 w-8 rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center text-sm font-medium text-gray-600"
+                    >
+                      -5
+                    </button>
                     
-                    {/* Number input */}
-                    <input
-                      type="number"
-                      min="40"
-                      max="300"
-                      value={metronomeBPM}
-                      onChange={(e) => {
-                        const val = parseInt(e.target.value) || 120
-                        setMetronomeBPM(Math.min(300, Math.max(40, val)))
-                      }}
-                      className="w-16 px-2 py-1 text-center font-mono text-sm border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      disabled={isRecording}
-                    />
+                    {/* Fine tune buttons */}
+                    <button
+                      onClick={() => setMetronomeBPM(Math.max(40, metronomeBPM - 1))}
+                      disabled={isRecording || metronomeBPM <= 40}
+                      className="h-8 w-8 rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center text-gray-600"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+                      </svg>
+                    </button>
                     
-                    {/* Decrease/Increase buttons */}
-                    <div className="flex gap-1">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setMetronomeBPM(Math.max(40, metronomeBPM - 5))}
-                        disabled={isRecording || metronomeBPM <= 40}
-                        className="h-7 w-7 p-0"
-                      >
-                        -5
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setMetronomeBPM(Math.max(40, metronomeBPM - 1))}
-                        disabled={isRecording || metronomeBPM <= 40}
-                        className="h-7 w-7 p-0"
-                      >
-                        -
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setMetronomeBPM(Math.min(300, metronomeBPM + 1))}
-                        disabled={isRecording || metronomeBPM >= 300}
-                        className="h-7 w-7 p-0"
-                      >
-                        +
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setMetronomeBPM(Math.min(300, metronomeBPM + 5))}
-                        disabled={isRecording || metronomeBPM >= 300}
-                        className="h-7 w-7 p-0"
-                      >
-                        +5
-                      </Button>
+                    {/* BPM Display */}
+                    <div className="text-center px-2">
+                      <div className="text-4xl font-bold text-gray-900 tabular-nums min-w-[100px]">
+                        {metronomeBPM}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">BPM</div>
                     </div>
                     
-                    {/* Slider */}
+                    <button
+                      onClick={() => setMetronomeBPM(Math.min(300, metronomeBPM + 1))}
+                      disabled={isRecording || metronomeBPM >= 300}
+                      className="h-8 w-8 rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center text-gray-600"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                      </svg>
+                    </button>
+                    
+                    {/* +5 button */}
+                    <button
+                      onClick={() => setMetronomeBPM(Math.min(300, metronomeBPM + 5))}
+                      disabled={isRecording || metronomeBPM >= 300}
+                      className="h-8 w-8 rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center text-sm font-medium text-gray-600"
+                    >
+                      +5
+                    </button>
+                  </div>
+                  
+                  {/* Slider */}
+                  <div className="px-2">
                     <input
                       type="range"
                       min="40"
                       max="300"
                       value={metronomeBPM}
                       onChange={(e) => setMetronomeBPM(Number(e.target.value))}
-                      className="flex-1"
+                      className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
                       disabled={isRecording}
+                      style={{
+                        background: `linear-gradient(to right, rgb(59, 130, 246) 0%, rgb(59, 130, 246) ${((metronomeBPM - 40) / 260) * 100}%, rgb(229, 231, 235) ${((metronomeBPM - 40) / 260) * 100}%, rgb(229, 231, 235) 100%)`
+                      }}
                     />
+                    <div className="flex justify-between text-xs text-gray-400 mt-1">
+                      <span>40</span>
+                      <span>300</span>
+                    </div>
                   </div>
                   
-                  {/* Preset buttons */}
-                  <div className="flex gap-1 flex-wrap">
-                    <span className="text-xs text-gray-500">Presets:</span>
-                    {[60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 180].map(bpm => (
-                      <Button
+                  {/* Quick presets */}
+                  <div className="grid grid-cols-7 gap-2">
+                    {[60, 70, 80, 90, 100, 110, 120].map(bpm => (
+                      <button
                         key={bpm}
-                        variant={metronomeBPM === bpm ? "default" : "outline"}
-                        size="sm"
                         onClick={() => setMetronomeBPM(bpm)}
                         disabled={isRecording}
-                        className="h-6 px-2 text-xs"
+                        className={`py-2 rounded-lg text-sm font-medium transition-all ${
+                          metronomeBPM === bpm 
+                            ? 'bg-blue-600 text-white shadow-sm' 
+                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                        } disabled:opacity-50 disabled:cursor-not-allowed`}
                       >
                         {bpm}
-                      </Button>
+                      </button>
                     ))}
                   </div>
                   
-                  {/* Tempo marking */}
-                  <div className="text-xs text-gray-500 text-center">
-                    {metronomeBPM < 60 && "Grave (very slow)"}
-                    {metronomeBPM >= 60 && metronomeBPM < 66 && "Largo (slow)"}
-                    {metronomeBPM >= 66 && metronomeBPM < 76 && "Adagio (slow)"}
-                    {metronomeBPM >= 76 && metronomeBPM < 108 && "Andante (walking pace)"}
-                    {metronomeBPM >= 108 && metronomeBPM < 120 && "Moderato (moderate)"}
-                    {metronomeBPM >= 120 && metronomeBPM < 156 && "Allegro (fast)"}
-                    {metronomeBPM >= 156 && metronomeBPM < 200 && "Vivace (lively)"}
-                    {metronomeBPM >= 200 && "Presto (very fast)"}
-                    {metronomeEnabled && ' • 🟢 Downbeat • 🔵 Regular beats'}
+                  {/* Tempo description */}
+                  <div className="text-center py-2 px-3 bg-gray-50 rounded-lg">
+                    <div className="text-sm font-medium text-gray-700">
+                      {metronomeBPM < 60 && "Grave"}
+                      {metronomeBPM >= 60 && metronomeBPM < 76 && "Adagio"}
+                      {metronomeBPM >= 76 && metronomeBPM < 108 && "Andante"}
+                      {metronomeBPM >= 108 && metronomeBPM < 120 && "Moderato"}
+                      {metronomeBPM >= 120 && metronomeBPM < 156 && "Allegro"}
+                      {metronomeBPM >= 156 && metronomeBPM < 200 && "Vivace"}
+                      {metronomeBPM >= 200 && "Presto"}
+                    </div>
+                    <div className="text-xs text-gray-500 mt-0.5">
+                      {metronomeEnabled ? '🟢 Beat 1 (downbeat) • 🔵 Beats 2-4' : 'Click toggle to enable'}
+                    </div>
                   </div>
                 </div>
               </div>
