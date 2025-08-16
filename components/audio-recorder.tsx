@@ -41,99 +41,72 @@ export function AudioRecorder({
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const dataArrayRef = useRef<Uint8Array | null>(null)
   const isRecordingRef = useRef<boolean>(false)
+  const waveformHistoryRef = useRef<number[]>([])
+  const recordingStartTimeRef = useRef<number>(0)
 
   const drawWaveform = useCallback(() => {
-    console.log('🔥 drawWaveform called', { 
-      hasCanvas: !!canvasRef.current, 
-      isRecording: isRecordingRef.current,
-      canvasSize: canvasRef.current ? `${canvasRef.current.width}x${canvasRef.current.height}` : 'no canvas'
-    })
-    
-    if (!canvasRef.current) {
-      console.error('❌ NO CANVAS REF!')
-      return
-    }
-    
-    if (!isRecordingRef.current) {
-      console.log('⏸️ Not recording, stopping draw')
-      return
-    }
+    if (!canvasRef.current) return
+    if (!isRecordingRef.current) return
 
     const canvas = canvasRef.current
     const ctx = canvas.getContext('2d')
-    
-    if (!ctx) {
-      console.error('❌ No canvas context')
-      return
-    }
+    if (!ctx) return
 
-    console.log('🎨 Drawing waveform...', { 
-      hasAnalyser: !!analyserRef.current, 
-      hasDataArray: !!dataArrayRef.current,
-      canvasSize: `${canvas.width}x${canvas.height}`
-    })
-
-    // Clear canvas - this should ALWAYS happen
+    // Clear canvas
     ctx.fillStyle = 'rgb(248, 250, 252)' // bg-slate-50
     ctx.fillRect(0, 0, canvas.width, canvas.height)
 
-    // Draw center line for reference (silence baseline)
     const centerY = canvas.height / 2
-    ctx.strokeStyle = 'rgb(200, 200, 200)' // gray baseline
+
+    // Calculate timeline parameters
+    const currentTime = (Date.now() - recordingStartTimeRef.current) / 1000 // seconds since recording started
+    const timeWindow = 8 // Show 8 seconds of history (slower scrolling)
+    const pixelsPerSecond = canvas.width / timeWindow
+    
+    // Get current audio data and add to history
+    if (analyserRef.current && dataArrayRef.current) {
+      const analyser = analyserRef.current
+      const dataArray = dataArrayRef.current
+      analyser.getByteTimeDomainData(dataArray)
+      
+      // Calculate RMS amplitude for this frame
+      let sum = 0
+      for (let i = 0; i < dataArray.length; i++) {
+        const normalized = (dataArray[i] - 128) / 128 // Convert to -1 to 1 range
+        sum += normalized * normalized
+      }
+      const rms = Math.sqrt(sum / dataArray.length)
+      
+      // Add to history with timestamp
+      waveformHistoryRef.current.push(rms)
+      
+      // Keep only data within our time window (sample at ~60fps)
+      const maxHistoryLength = timeWindow * 60
+      if (waveformHistoryRef.current.length > maxHistoryLength) {
+        waveformHistoryRef.current = waveformHistoryRef.current.slice(-maxHistoryLength)
+      }
+    }
+
+    // Draw time grid lines (every 2 seconds)
+    ctx.strokeStyle = 'rgb(220, 220, 220)'
+    ctx.lineWidth = 1
+    ctx.setLineDash([2, 2])
+    for (let t = 0; t <= timeWindow; t += 2) {
+      const x = t * pixelsPerSecond
+      ctx.beginPath()
+      ctx.moveTo(x, 0)
+      ctx.lineTo(x, canvas.height)
+      ctx.stroke()
+    }
+    ctx.setLineDash([])
+
+    // Draw center line
+    ctx.strokeStyle = 'rgb(200, 200, 200)'
     ctx.lineWidth = 1
     ctx.beginPath()
     ctx.moveTo(0, centerY)
     ctx.lineTo(canvas.width, centerY)
     ctx.stroke()
-
-    // If we have audio data, draw it
-    if (analyserRef.current && dataArrayRef.current) {
-      const analyser = analyserRef.current
-      const dataArray = dataArrayRef.current
-      
-      // Get current audio data
-      analyser.getByteTimeDomainData(dataArray)
-
-      // Draw waveform
-      ctx.lineWidth = 2
-      ctx.strokeStyle = 'rgb(59, 130, 246)' // blue-500
-      ctx.beginPath()
-
-      const sliceWidth = canvas.width / dataArray.length
-      let x = 0
-
-      for (let i = 0; i < dataArray.length; i++) {
-        const v = dataArray[i] / 128.0  // Convert to 0-2 range
-        const y = v * canvas.height / 2 // Scale to canvas height
-
-        if (i === 0) {
-          ctx.moveTo(x, y)
-        } else {
-          ctx.lineTo(x, y)
-        }
-
-        x += sliceWidth
-      }
-
-      ctx.stroke()
-      
-      // Log some sample data for debugging
-      if (Math.random() < 0.1) { // Log occasionally
-        console.log('📊 Audio data sample:', {
-          firstFew: Array.from(dataArray.slice(0, 5)),
-          average: dataArray.reduce((a, b) => a + b, 0) / dataArray.length
-        })
-      }
-    } else {
-      // No audio data yet, draw test pattern
-      ctx.strokeStyle = 'rgb(255, 165, 0)' // orange test line
-      ctx.lineWidth = 2
-      ctx.beginPath()
-      ctx.moveTo(0, centerY)
-      ctx.lineTo(canvas.width, centerY + 20 * Math.sin(Date.now() / 200))
-      ctx.stroke()
-      console.log('🔶 Drawing test pattern (no audio data yet)')
-    }
 
     // Draw onset detection threshold lines
     const thresholdOffset = 30
@@ -148,11 +121,64 @@ export function AudioRecorder({
     ctx.stroke()
     ctx.setLineDash([])
 
+    // Draw waveform history
+    if (waveformHistoryRef.current.length > 1) {
+      ctx.lineWidth = 2
+      ctx.strokeStyle = 'rgb(59, 130, 246)' // blue-500
+      ctx.beginPath()
+
+      // Calculate how much of the canvas each sample should occupy
+      const totalSamples = waveformHistoryRef.current.length
+      const pixelsPerSample = canvas.width / Math.min(totalSamples, timeWindow * 60)
+      
+      for (let i = 0; i < waveformHistoryRef.current.length; i++) {
+        // Position from left to right, newest samples on the right
+        const x = i * pixelsPerSample
+        const amplitude = waveformHistoryRef.current[i]
+        const y = centerY - (amplitude * centerY * 0.8) // Scale amplitude to 80% of half height
+        
+        if (i === 0) {
+          ctx.moveTo(x, y)
+        } else {
+          ctx.lineTo(x, y)
+        }
+      }
+      
+      ctx.stroke()
+      
+      // Draw positive amplitude (mirror)
+      ctx.beginPath()
+      for (let i = 0; i < waveformHistoryRef.current.length; i++) {
+        const x = i * pixelsPerSample
+        const amplitude = waveformHistoryRef.current[i]
+        const y = centerY + (amplitude * centerY * 0.8)
+        
+        if (i === 0) {
+          ctx.moveTo(x, y)
+        } else {
+          ctx.lineTo(x, y)
+        }
+      }
+      ctx.stroke()
+    }
+
+    // Draw time labels (only every 2 seconds to avoid overlap)
+    ctx.fillStyle = 'rgb(100, 100, 100)'
+    ctx.font = '10px monospace'
+    ctx.textAlign = 'center'
+    for (let t = 0; t <= timeWindow; t += 2) {
+      const x = t * pixelsPerSecond
+      const timeLabel = (currentTime - (timeWindow - t)).toFixed(1) + 's'
+      if (currentTime - (timeWindow - t) >= 0) {
+        ctx.fillText(timeLabel, x, canvas.height - 5)
+      }
+    }
+
     // Continue animation
-    if (isRecording) {
+    if (isRecordingRef.current) {
       animationIdRef.current = requestAnimationFrame(drawWaveform)
     }
-  }, [isRecording])
+  }, [])
 
   const startRecording = useCallback(async () => {
     try {
@@ -203,32 +229,17 @@ export function AudioRecorder({
         const bufferLength = analyser.frequencyBinCount
         dataArrayRef.current = new Uint8Array(bufferLength)
         
+        // Set recording state FIRST
+        isRecordingRef.current = true
+        recordingStartTimeRef.current = Date.now()
+        waveformHistoryRef.current = [] // Clear previous history
+        
         // Start real-time visualization
         console.log('🎤 Starting real-time visualization')
         
-        // Force immediate test draw
+        // Start animation loop immediately
         setTimeout(() => {
-          console.log('⚡ FORCING TEST DRAW')
-          if (canvasRef.current) {
-            const canvas = canvasRef.current
-            const ctx = canvas.getContext('2d')
-            if (ctx) {
-              ctx.fillStyle = 'red'
-              ctx.fillRect(0, 0, canvas.width, canvas.height)
-              ctx.fillStyle = 'white'
-              ctx.font = '20px Arial'
-              ctx.fillText('TEST DRAW WORKS!', 50, 60)
-              console.log('✅ TEST DRAW COMPLETED')
-            } else {
-              console.error('❌ NO CANVAS CONTEXT')
-            }
-          } else {
-            console.error('❌ NO CANVAS REF IN TIMEOUT')
-          }
-        }, 100)
-        
-        // Start animation after canvas is rendered
-        setTimeout(() => {
+          console.log('🚀 Starting animation loop')
           drawWaveform()
         }, 50)
       }
@@ -246,6 +257,7 @@ export function AudioRecorder({
   const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop()
+      isRecordingRef.current = false
       setIsRecording(false)
       
       if (animationIdRef.current) {
