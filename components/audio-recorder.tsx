@@ -62,7 +62,7 @@ export function AudioRecorder({
     const ctx = canvas.getContext('2d')
     
     if (!ctx) {
-      console.log('❌ No canvas context')
+      console.error('❌ No canvas context')
       return
     }
 
@@ -204,11 +204,36 @@ export function AudioRecorder({
         
         // Start real-time visualization
         console.log('🎤 Starting real-time visualization')
-        // Force immediate test draw\n        setTimeout(() => {\n          console.log('⚡ FORCING TEST DRAW')\n          if (canvasRef.current) {\n            const canvas = canvasRef.current\n            const ctx = canvas.getContext('2d')\n            if (ctx) {\n              ctx.fillStyle = 'red'\n              ctx.fillRect(0, 0, canvas.width, canvas.height)\n              ctx.fillStyle = 'white'\n              ctx.font = '20px Arial'\n              ctx.fillText('TEST DRAW WORKS!', 50, 60)\n              console.log('✅ TEST DRAW COMPLETED')\n            } else {\n              console.error('❌ NO CANVAS CONTEXT')\n            }\n          } else {\n            console.error('❌ NO CANVAS REF IN TIMEOUT')\n          }\n        }, 100)\n        \n        drawWaveform()
+        
+        // Force immediate test draw
+        setTimeout(() => {
+          console.log('⚡ FORCING TEST DRAW')
+          if (canvasRef.current) {
+            const canvas = canvasRef.current
+            const ctx = canvas.getContext('2d')
+            if (ctx) {
+              ctx.fillStyle = 'red'
+              ctx.fillRect(0, 0, canvas.width, canvas.height)
+              ctx.fillStyle = 'white'
+              ctx.font = '20px Arial'
+              ctx.fillText('TEST DRAW WORKS!', 50, 60)
+              console.log('✅ TEST DRAW COMPLETED')
+            } else {
+              console.error('❌ NO CANVAS CONTEXT')
+            }
+          } else {
+            console.error('❌ NO CANVAS REF IN TIMEOUT')
+          }
+        }, 100)
+        
+        // Start animation after canvas is rendered
+        setTimeout(() => {
+          drawWaveform()
+        }, 50)
       }
 
-      mediaRecorder.start(100) // Collect data every 100ms
       setIsRecording(true)
+      mediaRecorder.start(100) // Collect data every 100ms
       onStatusUpdate('Recording... Play your guitar!', 'recording')
       
     } catch (error) {
