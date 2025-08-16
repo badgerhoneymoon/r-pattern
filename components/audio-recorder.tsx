@@ -40,11 +40,12 @@ export function AudioRecorder({
   const animationIdRef = useRef<number | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const dataArrayRef = useRef<Uint8Array | null>(null)
+  const isRecordingRef = useRef<boolean>(false)
 
   const drawWaveform = useCallback(() => {
     console.log('🔥 drawWaveform called', { 
       hasCanvas: !!canvasRef.current, 
-      isRecording,
+      isRecording: isRecordingRef.current,
       canvasSize: canvasRef.current ? `${canvasRef.current.width}x${canvasRef.current.height}` : 'no canvas'
     })
     
@@ -53,7 +54,7 @@ export function AudioRecorder({
       return
     }
     
-    if (!isRecording) {
+    if (!isRecordingRef.current) {
       console.log('⏸️ Not recording, stopping draw')
       return
     }
