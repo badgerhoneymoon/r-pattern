@@ -170,6 +170,14 @@ export function AudioRecorder({
     }
   }, [isRecording, metronomeEnabled, startMetronome, stopMetronome])
 
+  // Restart metronome when BPM changes during recording
+  useEffect(() => {
+    if (isRecording && metronomeEnabled && metronomeIntervalRef.current !== null) {
+      console.log('🔄 BPM changed during recording, restarting metronome with new BPM:', metronomeBPM)
+      startMetronome()
+    }
+  }, [metronomeBPM, isRecording, metronomeEnabled, startMetronome])
+
   const drawWaveform = useCallback(() => {
     if (!canvasRef.current) return
     if (!isRecordingRef.current) return
@@ -619,7 +627,7 @@ export function AudioRecorder({
                     className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
                       metronomeEnabled ? 'bg-blue-600' : 'bg-gray-200'
                     }`}
-                    disabled={isRecording}
+                    disabled={false}
                   >
                     <span
                       className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${
@@ -635,7 +643,7 @@ export function AudioRecorder({
                     {/* -5 button */}
                     <button
                       onClick={() => setMetronomeBPM(Math.max(40, metronomeBPM - 5))}
-                      disabled={isRecording || metronomeBPM <= 40}
+                      disabled={metronomeBPM <= 40}
                       className="h-8 w-8 rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center text-sm font-medium text-gray-600"
                     >
                       -5
@@ -644,7 +652,7 @@ export function AudioRecorder({
                     {/* Fine tune buttons */}
                     <button
                       onClick={() => setMetronomeBPM(Math.max(40, metronomeBPM - 1))}
-                      disabled={isRecording || metronomeBPM <= 40}
+                      disabled={metronomeBPM <= 40}
                       className="h-8 w-8 rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center text-gray-600"
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -662,7 +670,7 @@ export function AudioRecorder({
                     
                     <button
                       onClick={() => setMetronomeBPM(Math.min(300, metronomeBPM + 1))}
-                      disabled={isRecording || metronomeBPM >= 300}
+                      disabled={metronomeBPM >= 300}
                       className="h-8 w-8 rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center text-gray-600"
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -673,7 +681,7 @@ export function AudioRecorder({
                     {/* +5 button */}
                     <button
                       onClick={() => setMetronomeBPM(Math.min(300, metronomeBPM + 5))}
-                      disabled={isRecording || metronomeBPM >= 300}
+                      disabled={metronomeBPM >= 300}
                       className="h-8 w-8 rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center text-sm font-medium text-gray-600"
                     >
                       +5
@@ -689,7 +697,7 @@ export function AudioRecorder({
                       value={metronomeBPM}
                       onChange={(e) => setMetronomeBPM(Number(e.target.value))}
                       className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                      disabled={isRecording}
+                      disabled={false}
                       style={{
                         background: `linear-gradient(to right, rgb(59, 130, 246) 0%, rgb(59, 130, 246) ${((metronomeBPM - 40) / 260) * 100}%, rgb(229, 231, 235) ${((metronomeBPM - 40) / 260) * 100}%, rgb(229, 231, 235) 100%)`
                       }}
@@ -706,7 +714,7 @@ export function AudioRecorder({
                       <button
                         key={bpm}
                         onClick={() => setMetronomeBPM(bpm)}
-                        disabled={isRecording}
+                        disabled={false}
                         className={`py-2 rounded-lg text-sm font-medium transition-all ${
                           metronomeBPM === bpm 
                             ? 'bg-blue-600 text-white shadow-sm' 
