@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Mic, Square, Play, Trash2, Upload, FileAudio, X, AlertCircle, RefreshCw, Headphones } from "lucide-react"
 
 interface AudioRecorderProps {
-  onRecordingComplete: (audioBlob: Blob) => void
+  onRecordingComplete: (audioBlob: Blob, metronomeBPM?: number) => void
   onFileProcessed: (audioBuffer: AudioBuffer) => void
   onStatusUpdate: (message: string, type: 'recording' | 'analyzing' | 'ready') => void
   onAnalyze: () => void
@@ -426,7 +426,7 @@ export function AudioRecorder({
 
       mediaRecorder.onstop = () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
-        onRecordingComplete(audioBlob)
+        onRecordingComplete(audioBlob, metronomeEnabled ? metronomeBPMRef.current : undefined)
         
         // Clean up stream
         mediaStream.getTracks().forEach(track => track.stop())
@@ -725,73 +725,7 @@ export function AudioRecorder({
                   </div>
                 </div>
 
-                {/* Live Input Level Monitor */}
-                {selectedDeviceId && !isRecording && (
-                  <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
-                    <div className="text-xs font-medium text-gray-700 mb-2">Input Level Test</div>
-                    <Button
-                      onClick={async () => {
-                        try {
-                          const testStream = await navigator.mediaDevices.getUserMedia({
-                            audio: {
-                              deviceId: { exact: selectedDeviceId },
-                              echoCancellation: false,
-                              noiseSuppression: false,
-                              autoGainControl: false
-                            }
-                          })
-                          
-                          const testContext = new AudioContext()
-                          const source = testContext.createMediaStreamSource(testStream)
-                          const analyser = testContext.createAnalyser()
-                          analyser.fftSize = 256
-                          source.connect(analyser)
-                          
-                          const dataArray = new Uint8Array(analyser.frequencyBinCount)
-                          
-                          let maxLevel = 0
-                          const checkLevel = () => {
-                            analyser.getByteFrequencyData(dataArray)
-                            let currentLevel = 0
-                            for (let i = 0; i < dataArray.length; i++) {
-                              currentLevel = Math.max(currentLevel, dataArray[i])
-                            }
-                            maxLevel = Math.max(maxLevel, currentLevel)
-                            
-                            console.log('🎸 Input level:', currentLevel, 'Max:', maxLevel)
-                            
-                            if (maxLevel > 10) {
-                              alert(`✅ Signal detected! Max level: ${maxLevel}/255\nYour guitar signal is coming through!`)
-                              testStream.getTracks().forEach(track => track.stop())
-                              testContext.close()
-                              return
-                            }
-                            
-                            if (Date.now() - startTime < 5000) {
-                              requestAnimationFrame(checkLevel)
-                            } else {
-                              alert(`❌ No signal detected after 5 seconds.\nMax level was: ${maxLevel}/255\n\nTroubleshooting:\n- Check gain knob on Focusrite\n- Ensure guitar volume is up\n- Try different input on interface\n- Check System Preferences > Sound > Input`)
-                              testStream.getTracks().forEach(track => track.stop())
-                              testContext.close()
-                            }
-                          }
-                          
-                          const startTime = Date.now()
-                          checkLevel()
-                          
-                        } catch (error) {
-                          console.error('Test failed:', error)
-                          alert('Could not access audio device. Check permissions and device selection.')
-                        }
-                      }}
-                      variant="outline"
-                      size="sm"
-                      className="w-full text-xs"
-                    >
-                      Test Input Level (Play guitar for 5 sec)
-                    </Button>
-                  </div>
-                )}
+
               </div>
 
               {/* Metronome Controls - Clean Design */}
@@ -1052,31 +986,7 @@ export function AudioRecorder({
           )}
         </div>
 
-        {/* Action Buttons - Only show when we have audio */}
-        {hasAudioBuffer && (
-          <div className="flex gap-3 justify-center flex-wrap mt-8 pt-6 border-t">
-            <Button
-              onClick={onAnalyze}
-              disabled={!hasAudioBuffer || isAnalyzing}
-              size="lg"
-              className="flex items-center gap-2 min-w-[160px] bg-green-500 hover:bg-green-600"
-            >
-              <Play className="h-5 w-5" />
-              {isAnalyzing ? 'Analyzing...' : 'Analyze Rhythm'}
-            </Button>
 
-            <Button
-              onClick={handleClearAll}
-              variant="outline"
-              size="lg"
-              className="flex items-center gap-2"
-              disabled={isRecording || isAnalyzing}
-            >
-              <Trash2 className="h-5 w-5" />
-              Clear
-            </Button>
-          </div>
-        )}
         
         <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded-lg">
           <div className="text-xs text-blue-800">

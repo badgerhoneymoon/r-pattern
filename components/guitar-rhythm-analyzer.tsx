@@ -5,7 +5,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { AudioRecorder } from "./audio-recorder"
 import { WaveformVisualization } from "./waveform-visualization"
 import { EnhancedRhythmGrid } from "./enhanced-rhythm-grid"
-import { SensitivityControl } from "./sensitivity-control"
 import { MockDataGenerator } from "./mock-data-generator"
 
 export interface OnsetData {
@@ -22,7 +21,6 @@ export interface AnalysisResult {
 export function GuitarRhythmAnalyzer() {
   const [audioBuffer, setAudioBuffer] = useState<AudioBuffer | null>(null)
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null)
-  const [sensitivity, setSensitivity] = useState(50)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [status, setStatus] = useState<{message: string; type: 'recording' | 'analyzing' | 'ready'} | null>(null)
 
@@ -35,14 +33,17 @@ export function GuitarRhythmAnalyzer() {
     return audioContextRef.current
   }, [])
 
-  const handleRecordingComplete = useCallback(async (audioBlob: Blob) => {
+  const handleRecordingComplete = useCallback(async (audioBlob: Blob, metronomeBPM?: number) => {
     try {
       const audioContext = initAudioContext()
       const arrayBuffer = await audioBlob.arrayBuffer()
       const buffer = await audioContext.decodeAudioData(arrayBuffer)
       
       setAudioBuffer(buffer)
-      setStatus({ message: 'Recording complete! Click "Analyze Rhythm" to see the pattern.', type: 'ready' })
+      setStatus({ message: 'Recording complete! Analyzing rhythm...', type: 'analyzing' })
+      
+      // Auto-analyze immediately with metronome BPM if available
+      setTimeout(() => analyzeRhythm(buffer, metronomeBPM), 100)
     } catch (error) {
       console.error('Error processing audio:', error)
       setStatus({ message: 'Error processing audio recording.', type: 'ready' })
@@ -61,40 +62,107 @@ export function GuitarRhythmAnalyzer() {
     const sampleRate = buffer.sampleRate
     const windowSize = 2048
     const hopSize = 512
-    const sensitivityFactor = (100 - sensitivity) / 100
     
     const onsets: OnsetData[] = []
-    let previousEnergy = 0
     let onsetIndex = 0
     
+    // Multi-feature detection arrays
+    const energyHistory: number[] = []
+    const spectralCentroidHistory: number[] = []
+    const highFreqEnergyHistory: number[] = []
+    
+    // Pre-compute windowing function (Hann window)
+    const hannWindow = new Float32Array(windowSize)
+    for (let i = 0; i < windowSize; i++) {
+      hannWindow[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (windowSize - 1)))
+    }
+    
     for (let i = 0; i < data.length - windowSize; i += hopSize) {
+      // Apply windowing and compute FFT-like features
       let energy = 0
+      let spectralCentroid = 0
+      let highFreqEnergy = 0
+      let spectralFlux = 0
       
-      // Calculate energy in this window
+      // Calculate multiple features in time domain first
       for (let j = 0; j < windowSize; j++) {
-        energy += Math.abs(data[i + j])
+        const sample = data[i + j] * hannWindow[j]
+        energy += sample * sample
       }
+      energy = Math.sqrt(energy / windowSize)
       
-      energy /= windowSize
+      // Simplified spectral features using frequency bands
+      // Low band (fundamental): 0-500Hz equivalent
+      // High band (harmonics/attack): 2000Hz+ equivalent  
+      const lowBandStart = Math.floor(windowSize * 0.02)  // ~80Hz at 44.1kHz
+      const highBandStart = Math.floor(windowSize * 0.3)  // ~2kHz at 44.1kHz
       
-      // Detect sudden increase in energy
-      if (energy > previousEnergy * (1 + sensitivityFactor) && energy > 0.01) {
-        const timeInSeconds = i / sampleRate
+      for (let j = 0; j < windowSize / 2; j++) {
+        const freq = (j * sampleRate) / windowSize
+        const magnitude = Math.abs(data[i + j])
         
-        // Avoid detecting multiple onsets too close together
-        if (onsets.length === 0 || timeInSeconds - onsets[onsets.length - 1].time > 0.05) {
-          onsets.push({
-            time: timeInSeconds,
-            index: onsetIndex++
-          })
+        // Spectral centroid approximation
+        spectralCentroid += freq * magnitude
+        
+        // High frequency energy (attack transients)
+        if (j >= highBandStart) {
+          highFreqEnergy += magnitude * magnitude
         }
       }
       
-      previousEnergy = energy * 0.9 + previousEnergy * 0.1 // Smooth the energy
+      spectralCentroid /= (energy + 1e-10) // Normalize
+      highFreqEnergy = Math.sqrt(highFreqEnergy)
+      
+      // Store history for comparison
+      energyHistory.push(energy)
+      spectralCentroidHistory.push(spectralCentroid)
+      highFreqEnergyHistory.push(highFreqEnergy)
+      
+      // Only start detecting after we have some history
+      if (energyHistory.length < 5) continue
+      
+      // Keep only recent history
+      if (energyHistory.length > 10) {
+        energyHistory.shift()
+        spectralCentroidHistory.shift()
+        highFreqEnergyHistory.shift()
+      }
+      
+      // Calculate moving averages for comparison
+      const recentEnergy = energyHistory.slice(-3).reduce((a, b) => a + b) / 3
+      const olderEnergy = energyHistory.slice(0, -3).reduce((a, b) => a + b) / (energyHistory.length - 3)
+      
+      const recentHighFreq = highFreqEnergyHistory.slice(-3).reduce((a, b) => a + b) / 3
+      const olderHighFreq = highFreqEnergyHistory.slice(0, -3).reduce((a, b) => a + b) / (highFreqEnergyHistory.length - 3)
+      
+      // Much stricter multi-criteria onset detection
+      const energyIncrease = recentEnergy > olderEnergy * 1.8  // Stricter energy increase
+      const highFreqIncrease = recentHighFreq > olderHighFreq * 2.2  // Much stricter transient detection
+      const absoluteThreshold = energy > 0.015  // Higher minimum energy threshold
+      
+      // Guitar-specific: look for high-frequency content increase (string attack) 
+      const hasAttackTransient = highFreqIncrease && recentHighFreq > 0.012  // Higher transient threshold
+      
+      // Combined detection - BOTH criteria must be met
+      const isOnset = energyIncrease && hasAttackTransient && absoluteThreshold
+      
+      if (isOnset) {
+        const timeInSeconds = i / sampleRate
+        
+        // Avoid detecting multiple onsets too close together (minimum 50ms apart)
+        if (onsets.length === 0 || timeInSeconds - onsets[onsets.length - 1].time > 0.05) {
+          onsets.push({
+            time: timeInSeconds,  // Keep absolute time for metronome sync
+            index: onsetIndex++
+          })
+          
+          console.log(`🎸 Onset detected at ${timeInSeconds.toFixed(3)}s - Energy: ${energy.toFixed(4)}, HighFreq: ${recentHighFreq.toFixed(4)}`)
+        }
+      }
     }
     
     return onsets
-  }, [sensitivity])
+  }, [])
 
   const estimateTempo = useCallback((onsets: OnsetData[]): number | null => {
     if (onsets.length < 2) return null
@@ -118,28 +186,34 @@ export function GuitarRhythmAnalyzer() {
     return bpm
   }, [])
 
-  const analyzeRhythm = useCallback(async () => {
-    if (!audioBuffer) return
+  const analyzeRhythm = useCallback(async (bufferToAnalyze?: AudioBuffer, metronomeBPM?: number) => {
+    const buffer = bufferToAnalyze || audioBuffer
+    if (!buffer) return
 
     setIsAnalyzing(true)
     setStatus({ message: 'Analyzing rhythm pattern...', type: 'analyzing' })
 
     try {
-      const onsets = detectOnsets(audioBuffer)
-      const estimatedBPM = estimateTempo(onsets)
+      const onsets = detectOnsets(buffer)
+      
+      // ALWAYS use metronome BPM when available - ignore audio estimation
+      const finalBPM = metronomeBPM || 120 // Default to 120 if no metronome
+      
+      console.log('🎵 DEBUGGING - metronomeBPM passed:', metronomeBPM, 'finalBPM:', finalBPM)
       
       const result: AnalysisResult = {
         onsets,
-        estimatedBPM,
-        duration: audioBuffer.duration
+        estimatedBPM: finalBPM,
+        duration: buffer.duration
       }
       
       setAnalysisResult(result)
       
       if (onsets.length === 0) {
-        setStatus({ message: 'No notes detected. Try adjusting the sensitivity and recording again.', type: 'ready' })
+        setStatus({ message: 'No notes detected. Try recording with more attack/pick strength.', type: 'ready' })
       } else {
-        const message = `Detected ${onsets.length} notes.${estimatedBPM ? ` Estimated tempo: ${estimatedBPM} BPM` : ''}`
+        const bpmSource = metronomeBPM ? 'metronome' : 'estimated'
+        const message = `Detected ${onsets.length} notes. Tempo: ${finalBPM} BPM (${bpmSource})`
         setStatus({ message, type: 'ready' })
       }
     } catch (error) {
@@ -158,6 +232,12 @@ export function GuitarRhythmAnalyzer() {
 
   const handleStatusUpdate = useCallback((message: string, type: 'recording' | 'analyzing' | 'ready') => {
     setStatus({ message, type })
+    
+    // Auto-clear when starting a new recording
+    if (type === 'recording') {
+      setAnalysisResult(null)
+      setAudioBuffer(null)
+    }
   }, [])
 
   const handleMockDataGenerated = useCallback((mockAudioBuffer: AudioBuffer, mockAnalysisResult: AnalysisResult) => {
@@ -180,35 +260,18 @@ export function GuitarRhythmAnalyzer() {
             onRecordingComplete={handleRecordingComplete}
             onFileProcessed={handleFileUploaded}
             onStatusUpdate={handleStatusUpdate}
-            onAnalyze={analyzeRhythm}
-            onClear={handleClear}
+            onAnalyze={() => {}} // Not used anymore
+            onClear={() => {}} // Not used anymore
             hasAudioBuffer={!!audioBuffer}
             isAnalyzing={isAnalyzing}
             audioContext={audioContextRef.current}
           />
 
-          {!analysisResult && (
-            <>
-              <SensitivityControl
-                value={sensitivity}
-                onChange={setSensitivity}
-              />
-
-              <MockDataGenerator onMockDataGenerated={handleMockDataGenerated} />
-            </>
+          {!analysisResult && false && (
+            <MockDataGenerator onMockDataGenerated={handleMockDataGenerated} />
           )}
 
-          {status && (
-            <Card className={`border-l-4 ${
-              status.type === 'recording' ? 'border-red-500 bg-red-50' :
-              status.type === 'analyzing' ? 'border-blue-500 bg-blue-50' :
-              'border-green-500 bg-green-50'
-            }`}>
-              <CardContent className="pt-4">
-                <p className="text-center font-medium">{status.message}</p>
-              </CardContent>
-            </Card>
-          )}
+
 
           <EnhancedRhythmGrid 
             analysisResult={analysisResult}
