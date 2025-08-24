@@ -2,10 +2,13 @@
 
 import { useState, useRef, useCallback } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
 import { AudioRecorder } from "./audio-recorder"
 import { WaveformVisualization } from "./waveform-visualization"
 import { EnhancedRhythmGrid } from "./enhanced-rhythm-grid"
 import { MockDataGenerator } from "./mock-data-generator"
+import { Music2 } from "lucide-react"
+import Link from "next/link"
 
 export interface OnsetData {
   time: number
@@ -22,7 +25,7 @@ export function GuitarRhythmAnalyzer() {
   const [audioBuffer, setAudioBuffer] = useState<AudioBuffer | null>(null)
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
-  const [status, setStatus] = useState<{message: string; type: 'recording' | 'analyzing' | 'ready'} | null>(null)
+  const [, setStatus] = useState<{message: string; type: 'recording' | 'analyzing' | 'ready'} | null>(null)
 
   const audioContextRef = useRef<AudioContext | null>(null)
 
@@ -33,131 +36,106 @@ export function GuitarRhythmAnalyzer() {
     return audioContextRef.current
   }, [])
 
-  const handleRecordingComplete = useCallback(async (audioBlob: Blob, metronomeBPM?: number, offsetEnabled?: boolean) => {
-    try {
-      const audioContext = initAudioContext()
-      const arrayBuffer = await audioBlob.arrayBuffer()
-      const buffer = await audioContext.decodeAudioData(arrayBuffer)
-      
-      setAudioBuffer(buffer)
-      setStatus({ message: 'Recording complete! Analyzing rhythm...', type: 'analyzing' })
-      
-      // Auto-analyze immediately with metronome BPM if available
-      setTimeout(() => analyzeRhythm(buffer, metronomeBPM, offsetEnabled), 100)
-    } catch (error) {
-      console.error('Error processing audio:', error)
-      setStatus({ message: 'Error processing audio recording.', type: 'ready' })
-    }
-  }, [initAudioContext])
-
-  const handleFileUploaded = useCallback(async (buffer: AudioBuffer) => {
-    // Ensure audio context is initialized
-    initAudioContext()
-    setAudioBuffer(buffer)
-    setStatus({ message: 'Audio file uploaded! Click "Analyze Rhythm" to see the pattern.', type: 'ready' })
-  }, [initAudioContext])
-
   const detectOnsets = useCallback((buffer: AudioBuffer): OnsetData[] => {
-    const x = buffer.getChannelData(0)
-    const sr = buffer.sampleRate
+    const data = buffer.getChannelData(0)
+    const sampleRate = buffer.sampleRate
 
-    // Envelope: rectify + 10ms exponential moving average (no high-pass)
-    const env = new Float32Array(x.length)
-    const tau = 0.010 // 10ms smoothing
-    const envAlpha = 1 - Math.exp(-1 / (sr * tau))
-    let envPrev = 0
-    for (let i = 0; i < x.length; i++) {
-      const rect = Math.abs(x[i])
-      envPrev = (1 - envAlpha) * envPrev + envAlpha * rect
-      env[i] = envPrev
+    // Spectral flux with local adaptive threshold and log magnitude
+    const fftSize = 1024
+    const hopSize = 256
+
+    // Hann window
+    const window = new Float32Array(fftSize)
+    for (let i = 0; i < fftSize; i++) window[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (fftSize - 1)))
+
+    // Windowed frames
+    const frames: Float32Array[] = []
+    for (let pos = 0; pos + fftSize <= data.length; pos += hopSize) {
+      const frame = new Float32Array(fftSize)
+      for (let i = 0; i < fftSize; i++) frame[i] = data[pos + i] * window[i]
+      frames.push(frame)
     }
 
-    // Sliding threshold on novelty (computed below): mean + 0.8*std over 0.5s
-
-    // Tempo-agnostic peak picking with refractory
-    // Novelty: positive difference over 15ms
-    const diffWin = Math.max(1, Math.floor(sr * 0.015))
-    const nov = new Float32Array(env.length)
-    for (let i = diffWin; i < env.length; i++) {
-      const d = env[i] - env[i - diffWin]
-      nov[i] = d > 0 ? d : 0
+    // Very small DFT to avoid dependency; log-magnitude spectrum
+    const computeSpectrum = (frame: Float32Array): Float32Array => {
+      const spectrum = new Float32Array(fftSize / 2)
+      for (let k = 0; k < fftSize / 2; k++) {
+        let real = 0, imag = 0
+        for (let n = 0; n < frame.length; n++) {
+          const angle = -2 * Math.PI * k * n / fftSize
+          real += frame[n] * Math.cos(angle)
+          imag += frame[n] * Math.sin(angle)
+        }
+        const mag = Math.sqrt(real * real + imag * imag)
+        spectrum[k] = Math.log1p(mag)
+      }
+      return spectrum
     }
 
-    // Gamma expansion to boost transients
-    const gamma = 1.5
-    for (let i = 0; i < nov.length; i++) {
-      if (nov[i] > 0) nov[i] = Math.pow(nov[i], gamma)
+    const spectra = frames.map(computeSpectrum)
+
+    // Spectral flux (half-wave rectified differences)
+    const flux: number[] = []
+    for (let i = 1; i < spectra.length; i++) {
+      let v = 0
+      const cur = spectra[i]
+      const prev = spectra[i - 1]
+      for (let b = 1; b < cur.length; b++) {
+        const d = cur[b] - prev[b]
+        if (d > 0) v += d
+      }
+      flux.push(v)
     }
 
-    // Sliding stats over 0.5s (z-score normalization)
-    const win = Math.max(1, Math.floor(sr * 0.5))
-    const z = new Float32Array(env.length)
+    // Local adaptive threshold over ~0.3s
+    const win = Math.max(8, Math.floor(0.3 * sampleRate / hopSize))
+    const thr: number[] = new Array(flux.length).fill(0)
     let sum = 0
     let sumSq = 0
-    const buf: number[] = []
-    for (let i = 0; i < nov.length; i++) {
-      const v = nov[i]
-      buf.push(v)
-      sum += v
-      sumSq += v * v
-      if (buf.length > win) {
-        const r = buf.shift() as number
+    for (let i = 0; i < flux.length; i++) {
+      sum += flux[i]
+      sumSq += flux[i] * flux[i]
+      if (i >= win) {
+        const r = flux[i - win]
         sum -= r
         sumSq -= r * r
       }
-      const n = buf.length
-      const mean = n ? sum / n : 0
-      const variance = n > 1 ? Math.max(0, sumSq / n - mean * mean) : 0
+      const n = Math.min(i + 1, win)
+      const mean = sum / n
+      const variance = Math.max(0, sumSq / n - mean * mean)
       const std = Math.sqrt(variance)
-      z[i] = std > 1e-12 ? (v - mean) / std : 0
+      thr[i] = mean + 0.6 * std
     }
 
-    // Peak picking with 180ms minimum separation and local refinement
-    const minSep = Math.floor(sr * 0.18)
-    const onsets: OnsetData[] = []
-    let last = -minSep
-    let idx = 0
-    const refine = Math.floor(sr * 0.02)
-    const zThresh = 0.8
-    for (let i = 1; i < z.length - 1; i++) {
-      if (z[i] > zThresh && z[i] >= z[i - 1] && z[i] >= z[i + 1]) {
-        if (i - last < minSep) continue
-        // refine to max envelope near the peak
-        let bestI = i
-        let bestV = env[i]
-        const i0 = Math.max(0, i - refine)
-        const i1 = Math.min(env.length - 1, i + refine)
-        for (let j = i0; j <= i1; j++) {
-          if (env[j] > bestV) { bestV = env[j]; bestI = j }
+    // Peak picking with hysteresis to avoid double-hits on sustains
+    const minSepFrames = Math.floor(0.12 * sampleRate / hopSize) // 120ms
+    const picked: { frame: number; value: number }[] = []
+    const highFactor = 1.25
+    const lowFactor = 0.80
+    let armed = true
+    let last = -minSepFrames
+    for (let i = 1; i < flux.length - 1; i++) {
+      const hi = thr[i] * highFactor
+      const lo = thr[i] * lowFactor
+      if (armed) {
+        if (flux[i] > hi && flux[i] > flux[i - 1] && flux[i] > flux[i + 1]) {
+          if (i - last >= minSepFrames) {
+            picked.push({ frame: i, value: flux[i] })
+            last = i
+            armed = false
+          }
         }
-        onsets.push({ time: bestI / sr, index: idx++ })
-        last = i
+      } else if (flux[i] < lo) {
+        armed = true
       }
     }
+
+    const onsets: OnsetData[] = picked
+      .map((p, idx) => ({ time: (p.frame + 1) * hopSize / sampleRate, index: idx }))
+      .sort((a, b) => a.time - b.time)
     return onsets
   }, [])
 
-  const estimateTempo = useCallback((onsets: OnsetData[]): number | null => {
-    if (onsets.length < 2) return null
-    
-    const intervals = []
-    for (let i = 1; i < onsets.length; i++) {
-      intervals.push(onsets[i].time - onsets[i - 1].time)
-    }
-    
-    // Find the most common interval
-    intervals.sort((a, b) => a - b)
-    const medianInterval = intervals[Math.floor(intervals.length / 2)]
-    
-    // Convert to BPM
-    const bpm = Math.round(60 / medianInterval)
-    
-    // Sanity check - if BPM is unrealistic, try doubling or halving
-    if (bpm < 40) return bpm * 2
-    if (bpm > 200) return Math.round(bpm / 2)
-    
-    return bpm
-  }, [])
 
   const analyzeRhythm = useCallback(async (bufferToAnalyze?: AudioBuffer, metronomeBPM?: number, offsetEnabled?: boolean) => {
     const buffer = bufferToAnalyze || audioBuffer
@@ -282,13 +260,31 @@ export function GuitarRhythmAnalyzer() {
     } finally {
       setIsAnalyzing(false)
     }
-  }, [audioBuffer, detectOnsets, estimateTempo])
+  }, [audioBuffer, detectOnsets])
 
-  const handleClear = useCallback(() => {
-    setAudioBuffer(null)
-    setAnalysisResult(null)
-    setStatus(null)
-  }, [])
+  const handleRecordingComplete = useCallback(async (audioBlob: Blob, metronomeBPM?: number, offsetEnabled?: boolean) => {
+    try {
+      const audioContext = initAudioContext()
+      const arrayBuffer = await audioBlob.arrayBuffer()
+      const buffer = await audioContext.decodeAudioData(arrayBuffer)
+      
+      setAudioBuffer(buffer)
+      setStatus({ message: 'Recording complete! Analyzing rhythm...', type: 'analyzing' })
+      
+      // Auto-analyze immediately with metronome BPM if available
+      setTimeout(() => analyzeRhythm(buffer, metronomeBPM, offsetEnabled), 100)
+    } catch (error) {
+      console.error('Error processing audio:', error)
+      setStatus({ message: 'Error processing audio recording.', type: 'ready' })
+    }
+  }, [initAudioContext, analyzeRhythm])
+
+  const handleFileUploaded = useCallback(async (buffer: AudioBuffer) => {
+    // Ensure audio context is initialized
+    initAudioContext()
+    setAudioBuffer(buffer)
+    setStatus({ message: 'Audio file uploaded! Click "Analyze Rhythm" to see the pattern.', type: 'ready' })
+  }, [initAudioContext])
 
   const handleStatusUpdate = useCallback((message: string, type: 'recording' | 'analyzing' | 'ready') => {
     setStatus({ message, type })
@@ -308,6 +304,14 @@ export function GuitarRhythmAnalyzer() {
 
   return (
     <div className="container mx-auto p-6 space-y-6">
+      <div className="flex justify-end mb-4">
+        <Link href="/grid">
+          <Button variant="outline" size="sm">
+            <Music2 className="h-4 w-4 mr-2" />
+            Grid
+          </Button>
+        </Link>
+      </div>
       <Card>
         <CardHeader className="text-center">
           <CardTitle className="text-3xl">🎸 Guitar Rhythm Analyzer</CardTitle>
@@ -320,9 +324,6 @@ export function GuitarRhythmAnalyzer() {
             onRecordingComplete={handleRecordingComplete}
             onFileProcessed={handleFileUploaded}
             onStatusUpdate={handleStatusUpdate}
-            onAnalyze={() => {}} // Not used anymore
-            onClear={() => {}} // Not used anymore
-            hasAudioBuffer={!!audioBuffer}
             isAnalyzing={isAnalyzing}
             audioContext={audioContextRef.current}
           />

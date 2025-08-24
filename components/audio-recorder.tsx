@@ -4,15 +4,12 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Mic, Square, Play, Trash2, Upload, FileAudio, X, AlertCircle, RefreshCw, Headphones } from "lucide-react"
+import { Mic, Square, Upload, AlertCircle, FileAudio, X, RefreshCw, Headphones } from "lucide-react"
 
 interface AudioRecorderProps {
   onRecordingComplete: (audioBlob: Blob, metronomeBPM?: number, offsetEnabled?: boolean) => void
   onFileProcessed: (audioBuffer: AudioBuffer) => void
   onStatusUpdate: (message: string, type: 'recording' | 'analyzing' | 'ready') => void
-  onAnalyze: () => void
-  onClear: () => void
-  hasAudioBuffer: boolean
   isAnalyzing: boolean
   audioContext: AudioContext | null
 }
@@ -21,9 +18,6 @@ export function AudioRecorder({
   onRecordingComplete,
   onFileProcessed,
   onStatusUpdate,
-  onAnalyze,
-  onClear,
-  hasAudioBuffer,
   isAnalyzing,
   audioContext
 }: AudioRecorderProps) {
@@ -98,7 +92,7 @@ export function AudioRecorder({
   // Load devices on mount
   useEffect(() => {
     loadAudioDevices()
-  }, [])
+  }, [loadAudioDevices])
 
   // Metronome click player - simple, no dependencies
   const playMetronomeClick = (isDownbeat: boolean) => {
@@ -478,7 +472,7 @@ export function AudioRecorder({
       console.error('Error accessing microphone:', error)
       onStatusUpdate('Error accessing microphone. Please ensure you have granted microphone permissions.', 'ready')
     }
-  }, [onRecordingComplete, onStatusUpdate, audioContext, drawWaveform, selectedDeviceId])
+  }, [onRecordingComplete, onStatusUpdate, audioContext, drawWaveform, selectedDeviceId, metronomeEnabled])
 
   const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
@@ -592,11 +586,6 @@ export function AudioRecorder({
     }
   }, [handleFileSelect])
 
-  const handleClearAll = useCallback(() => {
-    setUploadedFile(null)
-    setError(null)
-    onClear()
-  }, [onClear])
 
   // Cleanup on unmount
   useEffect(() => {
