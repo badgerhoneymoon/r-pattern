@@ -3,8 +3,10 @@
 import { useState, useRef, useEffect } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Play, Pause, RotateCcw, Music, Home, Copy } from "lucide-react"
+import { Play, Pause, RotateCcw, Music, Home, Copy, Repeat, GripVertical } from "lucide-react"
 import Link from "next/link"
+import { SavedPatternsManager } from "@/components/saved-patterns-manager"
+import { SavedPattern } from "@/lib/pattern-storage"
 
 
 type NoteDuration = '16th' | '8th' | 'quarter'
@@ -13,17 +15,31 @@ export function RhythmNotationEditor() {
   const [bpm, setBpm] = useState(120)
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentPosition, setCurrentPosition] = useState(-1)
-  const [pattern, setPattern] = useState<boolean[]>(new Array(32).fill(false))
-  const [noteTypes, setNoteTypes] = useState<NoteDuration[]>(new Array(32).fill('16th'))
+  const [pattern, setPattern] = useState<boolean[]>(new Array(64).fill(false))
+  const [noteTypes, setNoteTypes] = useState<NoteDuration[]>(new Array(64).fill('16th'))
+  const [fourBarMode, setFourBarMode] = useState(false)
+  const [draggedBar, setDraggedBar] = useState<number | null>(null)
+  const [currentPatternId, setCurrentPatternId] = useState<string | null>(null)
+  const [currentPatternName, setCurrentPatternName] = useState<string | null>(null)
   
   const audioContextRef = useRef<AudioContext | null>(null)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
   const currentIndexRef = useRef(0)
+  const clapBufferRef = useRef<AudioBuffer | null>(null)
 
-  // Initialize audio context
+  // Initialize audio context and load clap sound
   useEffect(() => {
     if (typeof window !== "undefined") {
       audioContextRef.current = new (window.AudioContext || (window as typeof window & { webkitAudioContext: typeof AudioContext }).webkitAudioContext)()
+      
+      // Load the clap sound
+      fetch('/hn_clap_aight.wav')
+        .then(response => response.arrayBuffer())
+        .then(data => audioContextRef.current!.decodeAudioData(data))
+        .then(buffer => {
+          clapBufferRef.current = buffer
+        })
+        .catch(error => console.error('Error loading clap sound:', error))
     }
     return () => {
       if (intervalRef.current) {
@@ -47,6 +63,9 @@ export function RhythmNotationEditor() {
         return newTypes
       })
     }
+    
+    // Clear pattern name when making changes (but keep ID for overwrite functionality)
+    setCurrentPatternName(null)
   }
 
   const changeNoteType = (index: number, newType: NoteDuration) => {
@@ -61,19 +80,26 @@ export function RhythmNotationEditor() {
       setPattern(prev => {
         const newPattern = [...prev]
         const span = newType === 'quarter' ? 4 : 2
+        const totalCells = fourBarMode ? 64 : 32
         for (let i = 1; i < span; i++) {
-          if (index + i < 32) {
+          if (index + i < totalCells) {
             newPattern[index + i] = false
           }
         }
         return newPattern
       })
     }
+    
+    // Clear pattern name when making changes (but keep ID for overwrite functionality)
+    setCurrentPatternName(null)
   }
 
   const clearPattern = () => {
-    setPattern(new Array(32).fill(false))
-    setNoteTypes(new Array(32).fill('16th'))
+    const size = fourBarMode ? 64 : 32
+    setPattern(new Array(size).fill(false))
+    setNoteTypes(new Array(size).fill('16th'))
+    setCurrentPatternId(null)
+    setCurrentPatternName(null)
     stopPlayback()
   }
 
@@ -97,6 +123,66 @@ export function RhythmNotationEditor() {
     })
   }
 
+  const copyBar = (fromBar: number, toBar: number) => {
+    const fromStart = fromBar * 16
+    const toStart = toBar * 16
+    
+    setPattern(prev => {
+      const newPattern = [...prev]
+      for (let i = 0; i < 16; i++) {
+        newPattern[toStart + i] = newPattern[fromStart + i]
+      }
+      return newPattern
+    })
+    
+    setNoteTypes(prev => {
+      const newTypes = [...prev]
+      for (let i = 0; i < 16; i++) {
+        newTypes[toStart + i] = newTypes[fromStart + i]
+      }
+      return newTypes
+    })
+  }
+
+  const handleBarDragStart = (barIndex: number) => {
+    setDraggedBar(barIndex)
+  }
+
+  const handleBarDragEnd = () => {
+    setDraggedBar(null)
+  }
+
+  const handleBarDrop = (targetBar: number) => {
+    if (draggedBar !== null && draggedBar !== targetBar) {
+      copyBar(draggedBar, targetBar)
+    }
+    setDraggedBar(null)
+  }
+
+  // Load a saved pattern
+  const loadPattern = (savedPattern: SavedPattern) => {
+    setPattern(savedPattern.pattern)
+    setNoteTypes(savedPattern.durations as NoteDuration[])
+    setBpm(savedPattern.bpm)
+    setCurrentPatternId(savedPattern.id)
+    setCurrentPatternName(savedPattern.name)
+    
+    // Auto-switch to 4-bar mode if pattern has more than 32 cells
+    if (savedPattern.pattern.length > 32) {
+      setFourBarMode(true)
+    } else {
+      setFourBarMode(false)
+    }
+    
+    stopPlayback()
+    
+    // Smooth scroll to top
+    window.scrollTo({
+      top: 0,
+      behavior: 'smooth'
+    })
+  }
+
   const playMetronomeClick = (isDownbeat: boolean = false) => {
     if (!audioContextRef.current) return
 
@@ -115,21 +201,18 @@ export function RhythmNotationEditor() {
   }
 
   const playPatternNote = () => {
-    if (!audioContextRef.current) return
+    if (!audioContextRef.current || !clapBufferRef.current) return
 
-    const osc = audioContextRef.current.createOscillator()
+    const source = audioContextRef.current.createBufferSource()
     const gainNode = audioContextRef.current.createGain()
     
-    osc.connect(gainNode)
+    source.buffer = clapBufferRef.current
+    source.connect(gainNode)
     gainNode.connect(audioContextRef.current.destination)
     
-    osc.frequency.value = 400
-    osc.type = 'sawtooth'
-    gainNode.gain.value = 0.15
+    gainNode.gain.value = 0.5
     
-    osc.start()
-    gainNode.gain.exponentialRampToValueAtTime(0.001, audioContextRef.current.currentTime + 0.12)
-    osc.stop(audioContextRef.current.currentTime + 0.12)
+    source.start()
   }
 
   const startPlayback = () => {
@@ -159,7 +242,8 @@ export function RhythmNotationEditor() {
         playPatternNote()
       }
       
-      currentIndexRef.current = (currentIndexRef.current + 1) % 32
+      const totalCells = fourBarMode ? 64 : 32
+      currentIndexRef.current = (currentIndexRef.current + 1) % totalCells
     }, sixteenthNoteDuration)
   }
 
@@ -182,10 +266,177 @@ export function RhythmNotationEditor() {
   }
 
   const renderGrid = () => {
-    const cells = []
-    let skipNext = 0
-    
-    for (let index = 0; index < 32; index++) {
+    if (fourBarMode) {
+      // Render 4 bars as 2 rows of 2 bars each
+      const rows = []
+      for (let row = 0; row < 2; row++) {
+        const cells = []
+        let skipNext = 0
+        const startIndex = row * 32
+        
+        for (let i = 0; i < 32; i++) {
+          const index = startIndex + i
+          
+          if (skipNext > 0) {
+            skipNext--
+            continue
+          }
+          
+          const isActive = pattern[index]
+          const bar = Math.floor(index / 16)
+          const beatInBar = Math.floor((index % 16) / 4)
+          const sixteenth = index % 4
+          const isDownbeat = beatInBar === 0 && sixteenth === 0
+          const isBeat = sixteenth === 0
+          const isCurrentlyPlaying = index === currentPosition
+          const isBarStart = index % 16 === 0
+          
+          const noteType = noteTypes[index]
+          const noteColor = noteType === 'quarter' ? 'bg-red-500' : noteType === '8th' ? 'bg-green-500' : 'bg-blue-500'
+          const noteSize = noteType === 'quarter' ? 'w-4 h-4' : noteType === '8th' ? 'w-3 h-3' : 'w-2 h-2'
+          
+          let cellSpan = 1
+          if (noteType === '8th') {
+            cellSpan = 2
+            skipNext = 1
+          } else if (noteType === 'quarter') {
+            cellSpan = 4
+            skipNext = 3
+          }
+          
+          const baseCellWidth = 30
+          const cellWidth = cellSpan * baseCellWidth
+          
+          cells.push(
+            <div key={index} className="relative group">
+              {isActive ? (
+                <div
+                  className={`
+                    relative h-20 border transition-all duration-100 flex-shrink-0 overflow-hidden
+                    ${isBarStart && (bar === 1 || bar === 3) ? 'border-l-4 border-l-purple-500 ml-1' : ''}
+                    ${isDownbeat && !(isBarStart && (bar === 1 || bar === 3)) ? 'border-l-4 border-l-red-500' : ''}
+                    ${isDownbeat && isBarStart && (bar === 0 || bar === 2) ? 'border-l-4 border-l-red-500' : ''}
+                    ${isBeat && !isDownbeat ? 'border-l-2 border-l-gray-400' : 'border-l border-gray-300'}
+                    ${noteColor}
+                    ${isCurrentlyPlaying ? 'ring-2 ring-yellow-400 ring-offset-1' : ''}
+                    border-gray-300
+                  `}
+                  style={{ width: `${cellWidth}px` }}
+                >
+                  <button
+                    onClick={() => {
+                      const nextType = noteType === '16th' ? '8th' : noteType === '8th' ? 'quarter' : '16th'
+                      changeNoteType(index, nextType)
+                    }}
+                    className="absolute top-0 left-0 right-0 h-1/2 hover:bg-black hover:bg-opacity-10 z-10"
+                    title={`Click to change duration (currently ${noteType})`}
+                  />
+                  
+                  <button
+                    onClick={() => toggleNote(index)}
+                    className="absolute bottom-0 left-0 right-0 h-1/2 hover:bg-black hover:bg-opacity-10 z-10"
+                    title="Click to remove note"
+                  />
+                  
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <div className={`${noteSize} bg-white rounded-full shadow-sm`} />
+                  </div>
+                  
+                  <div className="absolute left-0 right-0 top-1/2 h-px bg-white bg-opacity-20 pointer-events-none" />
+                </div>
+              ) : (
+                <button
+                  onClick={() => toggleNote(index)}
+                  className={`
+                    relative h-20 border transition-all duration-100 flex-shrink-0
+                    ${isBarStart && (bar === 1 || bar === 3) ? 'border-l-4 border-l-purple-500 ml-1' : ''}
+                    ${isDownbeat && !(isBarStart && (bar === 1 || bar === 3)) ? 'border-l-4 border-l-red-500' : ''}
+                    ${isDownbeat && isBarStart && (bar === 0 || bar === 2) ? 'border-l-4 border-l-red-500' : ''}
+                    ${isBeat && !isDownbeat ? 'border-l-2 border-l-gray-400' : 'border-l border-gray-300'}
+                    bg-white hover:bg-gray-100
+                    ${isCurrentlyPlaying ? 'ring-2 ring-yellow-400 ring-offset-1' : ''}
+                    border-gray-300
+                  `}
+                  style={{ width: `${cellWidth}px` }}
+                  title={`Bar ${bar + 1}, Beat ${beatInBar + 1}, 16th ${sixteenth + 1}\nClick to add note`}
+                />
+              )}
+              
+            </div>
+          )
+        }
+        
+        rows.push(
+          <div key={row}>
+            <div className="flex justify-center p-2">
+              <div className="flex">
+                {cells}
+              </div>
+            </div>
+            {/* 16th note indicators for this row */}
+            <div className="flex justify-center pb-2">
+              <div className="flex px-2">
+                {(() => {
+                  const indicators = []
+                  let skipNext = 0
+                  
+                  for (let i = 0; i < 32; i++) {
+                    const index = startIndex + i
+                    
+                    if (skipNext > 0) {
+                      skipNext--
+                      continue
+                    }
+                    
+                    const noteType = noteTypes[index]
+                    const sixteenth = index % 4
+                    
+                    let cellSpan = 1
+                    let label = ""
+                    
+                    const beatNumber = Math.floor((index % 16) / 4) + 1
+                    
+                    if (noteType === '16th') {
+                      cellSpan = 1
+                      label = sixteenth === 0 ? beatNumber.toString() : sixteenth === 1 ? "e" : sixteenth === 2 ? "&" : "a"
+                    } else if (noteType === '8th') {
+                      cellSpan = 2
+                      skipNext = 1
+                      label = sixteenth === 0 ? beatNumber.toString() : sixteenth === 2 ? "&" : (sixteenth === 1 ? "e" : "a")
+                    } else if (noteType === 'quarter') {
+                      cellSpan = 4
+                      skipNext = 3
+                      label = beatNumber.toString()
+                    }
+                    
+                    const cellWidth = cellSpan * 30
+                    
+                    indicators.push(
+                      <div 
+                        key={index} 
+                        className={`text-xs text-gray-500 ${noteType === '16th' ? 'text-center' : 'text-left pl-1'} ${['1', '2', '3', '4'].includes(label) ? 'font-bold' : ''}`} 
+                        style={{ width: `${cellWidth}px` }}
+                      >
+                        {label}
+                      </div>
+                    )
+                  }
+                  
+                  return indicators
+                })()}
+              </div>
+            </div>
+          </div>
+        )
+      }
+      
+      return rows
+    } else {
+      // Original 2-bar rendering
+      const cells = []
+      let skipNext = 0
+      
+      for (let index = 0; index < 32; index++) {
       if (skipNext > 0) {
         skipNext--
         continue
@@ -198,6 +449,7 @@ export function RhythmNotationEditor() {
       const isDownbeat = beatInBar === 0 && sixteenth === 0
       const isBeat = sixteenth === 0
       const isCurrentlyPlaying = index === currentPosition
+      const isBarStart = index % 16 === 0
       
       const noteType = noteTypes[index]
       const noteColor = noteType === 'quarter' ? 'bg-red-500' : noteType === '8th' ? 'bg-green-500' : 'bg-blue-500'
@@ -224,7 +476,9 @@ export function RhythmNotationEditor() {
             <div
               className={`
                 relative h-20 border transition-all duration-100 flex-shrink-0 overflow-hidden
-                ${isDownbeat ? 'border-l-4 border-l-red-500' : ''}
+                ${isBarStart && bar > 0 ? 'border-l-4 border-l-purple-500 ml-1' : ''}
+                ${isDownbeat && !isBarStart ? 'border-l-4 border-l-red-500' : ''}
+                ${isDownbeat && isBarStart && bar === 0 ? 'border-l-4 border-l-red-500' : ''}
                 ${isBeat && !isDownbeat ? 'border-l-2 border-l-gray-400' : 'border-l border-gray-300'}
                 ${noteColor}
                 ${isCurrentlyPlaying ? 'ring-2 ring-yellow-400 ring-offset-1' : ''}
@@ -263,7 +517,9 @@ export function RhythmNotationEditor() {
               onClick={() => toggleNote(index)}
               className={`
                 relative h-20 border transition-all duration-100 flex-shrink-0
-                ${isDownbeat ? 'border-l-4 border-l-red-500' : ''}
+                ${isBarStart && bar > 0 ? 'border-l-4 border-l-purple-500 ml-1' : ''}
+                ${isDownbeat && !isBarStart ? 'border-l-4 border-l-red-500' : ''}
+                ${isDownbeat && isBarStart && bar === 0 ? 'border-l-4 border-l-red-500' : ''}
                 ${isBeat && !isDownbeat ? 'border-l-2 border-l-gray-400' : 'border-l border-gray-300'}
                 bg-white hover:bg-gray-100
                 ${isCurrentlyPlaying ? 'ring-2 ring-yellow-400 ring-offset-1' : ''}
@@ -274,24 +530,19 @@ export function RhythmNotationEditor() {
             />
           )}
           
-          {/* Note type indicator */}
-          {isActive && (
-            <div className="absolute -bottom-1 left-1/2 transform -translate-x-1/2 text-xs font-bold text-gray-600 pointer-events-none">
-              {noteType === 'quarter' ? '♩' : noteType === '8th' ? '♪' : '♬'}
-            </div>
-          )}
         </div>
       )
     }
     
     return cells
+    }
   }
 
   return (
     <div className="container mx-auto p-6 max-w-6xl">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-3xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">
-          Grid
+          Grid{currentPatternId && !currentPatternName ? ` - Modified Pattern` : currentPatternName ? ` - ${currentPatternName}` : ''}
         </h1>
         <Link href="/">
           <Button variant="outline" size="sm">
@@ -306,30 +557,74 @@ export function RhythmNotationEditor() {
           <CardTitle className="flex items-center gap-2">
             <Music className="h-5 w-5" />
             16th Note Pattern Grid
+            <Button
+              onClick={() => setFourBarMode(!fourBarMode)}
+              size="sm"
+              variant={fourBarMode ? "default" : "outline"}
+              className="ml-auto"
+            >
+              <Repeat className="h-4 w-4 mr-2" />
+              {fourBarMode ? '4 Bars' : '2 Bars'}
+            </Button>
           </CardTitle>
           <CardDescription>
-            Click on the grid to place notes. Create 2 bars of 4/4 rhythmic patterns for bass grooves.
+            Click on the grid to place notes. Create {fourBarMode ? '4 bars' : '2 bars'} of 4/4 rhythmic patterns for bass grooves.
           </CardDescription>
         </CardHeader>
         <CardContent>
 
-          {/* Grid - full width with better styling */}
-          <div className="border-2 border-gray-400 rounded-lg shadow-sm bg-white">
-            <div className="flex justify-center p-2">
-              <div className="flex">
-                {renderGrid()}
+          {/* Bar labels with drag handles */}
+          {(fourBarMode || true) && (
+            <div className="flex justify-center mb-2">
+              <div className="flex gap-1">
+                {Array.from({ length: fourBarMode ? 4 : 2 }, (_, barIndex) => (
+                  <div
+                    key={barIndex}
+                    draggable
+                    onDragStart={() => handleBarDragStart(barIndex)}
+                    onDragEnd={handleBarDragEnd}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={() => handleBarDrop(barIndex)}
+                    className={`
+                      px-3 py-1 rounded-t-lg cursor-move transition-all
+                      ${draggedBar === barIndex ? 'bg-blue-500 text-white' : 'bg-gray-200 hover:bg-gray-300'}
+                    `}
+                    style={{ width: fourBarMode ? '120px' : '240px' }}
+                  >
+                    <div className="flex items-center justify-center gap-1">
+                      <GripVertical className="h-3 w-3" />
+                      <span className="text-sm font-medium">Bar {barIndex + 1}</span>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
+          )}
+
+          {/* Grid - full width with better styling */}
+          <div className="border-2 border-gray-400 rounded-lg shadow-sm bg-white">
+            {fourBarMode ? (
+              <div>
+                {renderGrid()}
+              </div>
+            ) : (
+              <div className="flex justify-center p-2">
+                <div className="flex">
+                  {renderGrid()}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* 16th note indicators - matching the rendered grid */}
-          <div className="mt-2 flex justify-center">
-            <div className="flex px-2">
-              {(() => {
-                const indicators = []
-                let skipNext = 0
-                
-                for (let index = 0; index < 32; index++) {
+          {!fourBarMode && (
+            <div className="mt-2 flex justify-center">
+              <div className="flex px-2">
+                {(() => {
+                  const indicators = []
+                  let skipNext = 0
+                  
+                  for (let index = 0; index < 32; index++) {
                   if (skipNext > 0) {
                     skipNext--
                     continue
@@ -341,25 +636,31 @@ export function RhythmNotationEditor() {
                   let cellSpan = 1
                   let label = ""
                   
+                  const beatNumber = Math.floor((index % 16) / 4) + 1 // 1, 2, 3, 4
+                  
                   if (noteType === '16th') {
                     cellSpan = 1
-                    label = sixteenth === 0 ? "1" : sixteenth === 1 ? "e" : sixteenth === 2 ? "&" : "a"
+                    label = sixteenth === 0 ? beatNumber.toString() : sixteenth === 1 ? "e" : sixteenth === 2 ? "&" : "a"
                   } else if (noteType === '8th') {
                     cellSpan = 2
                     skipNext = 1
                     // For 8th notes, show the starting subdivision
-                    label = sixteenth === 0 ? "1" : sixteenth === 2 ? "&" : (sixteenth === 1 ? "e" : "a")
+                    label = sixteenth === 0 ? beatNumber.toString() : sixteenth === 2 ? "&" : (sixteenth === 1 ? "e" : "a")
                   } else if (noteType === 'quarter') {
                     cellSpan = 4
                     skipNext = 3
                     // For quarter notes, only show beat numbers
-                    label = (Math.floor((index % 16) / 4) + 1).toString()
+                    label = beatNumber.toString()
                   }
                   
                   const cellWidth = cellSpan * 30
                   
                   indicators.push(
-                    <div key={index} className="text-center text-xs text-gray-500" style={{ width: `${cellWidth}px` }}>
+                    <div 
+                      key={index} 
+                      className={`text-xs text-gray-500 ${noteType === '16th' ? 'text-center' : 'text-left pl-1'} ${['1', '2', '3', '4'].includes(label) ? 'font-bold' : ''}`} 
+                      style={{ width: `${cellWidth}px` }}
+                    >
                       {label}
                     </div>
                   )
@@ -369,7 +670,51 @@ export function RhythmNotationEditor() {
               })()}
             </div>
           </div>
+          )}
 
+          {/* Action Buttons */}
+          <div className="mt-8 space-y-6">
+            <div className="flex gap-3">
+              <Button
+                onClick={togglePlayback}
+                size="lg"
+                className="flex-1"
+                variant={isPlaying ? "destructive" : "default"}
+              >
+                {isPlaying ? (
+                  <>
+                    <Pause className="h-4 w-4 mr-2" />
+                    Stop
+                  </>
+                ) : (
+                  <>
+                    <Play className="h-4 w-4 mr-2" />
+                    Play Pattern
+                  </>
+                )}
+              </Button>
+              
+              {!fourBarMode && (
+                <Button
+                  onClick={copyFirstBarToSecond}
+                  size="lg"
+                  variant="outline"
+                >
+                  <Copy className="h-4 w-4 mr-2" />
+                  Copy Bar 1→2
+                </Button>
+              )}
+              
+              <Button
+                onClick={clearPattern}
+                size="lg"
+                variant="outline"
+              >
+                <RotateCcw className="h-4 w-4 mr-2" />
+                Clear
+              </Button>
+            </div>
+          </div>
 
           {/* BPM Controls - Exact copy from AudioRecorder */}
           <div className="mt-6 bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
@@ -467,74 +812,26 @@ export function RhythmNotationEditor() {
                 ))}
               </div>
               
-              {/* Tempo description */}
-              <div className="text-center py-2 px-3 bg-gray-50 rounded-lg">
-                <div className="text-sm font-medium text-gray-700">
-                  {bpm < 60 && "Grave"}
-                  {bpm >= 60 && bpm < 76 && "Adagio"}
-                  {bpm >= 76 && bpm < 108 && "Andante"}
-                  {bpm >= 108 && bpm < 120 && "Moderato"}
-                  {bpm >= 120 && bpm < 156 && "Allegro"}
-                  {bpm >= 156 && bpm < 200 && "Vivace"}
-                  {bpm >= 200 && "Presto"}
-                </div>
-                <div className="text-xs text-gray-500 mt-0.5">
-                  🟢 Beat 1 (downbeat) • 🔵 Beats 2-4
-                </div>
-              </div>
+
             </div>
           </div>
 
-          {/* Action Buttons */}
-          <div className="mt-8 space-y-6">
-            <div className="flex gap-3">
-              <Button
-                onClick={togglePlayback}
-                size="lg"
-                className="flex-1"
-                variant={isPlaying ? "destructive" : "default"}
-              >
-                {isPlaying ? (
-                  <>
-                    <Pause className="h-4 w-4 mr-2" />
-                    Stop
-                  </>
-                ) : (
-                  <>
-                    <Play className="h-4 w-4 mr-2" />
-                    Play Pattern
-                  </>
-                )}
-              </Button>
-              
-              <Button
-                onClick={copyFirstBarToSecond}
-                size="lg"
-                variant="outline"
-              >
-                <Copy className="h-4 w-4 mr-2" />
-                Copy Bar 1→2
-              </Button>
-              
-              <Button
-                onClick={clearPattern}
-                size="lg"
-                variant="outline"
-              >
-                <RotateCcw className="h-4 w-4 mr-2" />
-                Clear
-              </Button>
-            </div>
-          </div>
-
-          {/* Pattern Summary */}
-          <div className="mt-6 p-4 bg-gray-50 rounded-lg">
-            <div className="text-sm text-gray-600">
-              <span className="font-medium">Active Notes:</span> {pattern.filter(Boolean).length} / 32
-            </div>
-          </div>
         </CardContent>
       </Card>
+
+      {/* Save/Load Pattern Manager */}
+      <div className="mt-6">
+        <SavedPatternsManager
+          currentPattern={pattern}
+          currentDurations={noteTypes}
+          currentBPM={bpm}
+          onLoadPattern={loadPattern}
+          currentPatternId={currentPatternId}
+          onPatternOverwritten={() => {
+            // Pattern was overwritten, no need to change the current pattern info
+          }}
+        />
+      </div>
     </div>
   )
 }
