@@ -19,7 +19,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -35,7 +34,7 @@ interface SavedPatternsManagerProps {
   currentBPM: number;
   onLoadPattern: (pattern: SavedPattern) => void;
   currentPatternId?: string | null;
-  onPatternOverwritten?: () => void;
+  onPatternOverwritten?: (originalName: string) => void;
 }
 
 export function SavedPatternsManager({
@@ -132,7 +131,7 @@ export function SavedPatternsManager({
       if (response.ok) {
         const data = await response.json();
         setPatterns(data.patterns);
-        onPatternOverwritten?.();
+        onPatternOverwritten?.(existingPattern.name);
         toast.success(`"${existingPattern.name}" has been updated`);
       } else {
         throw new Error('Failed to overwrite pattern');
@@ -240,65 +239,63 @@ export function SavedPatternsManager({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <ScrollArea className="h-[400px] pr-4">
-              <div className="space-y-3">
-                {patterns.map((pattern) => (
-                  <Card key={pattern.id} className="p-3">
-                    <div className="flex justify-between items-start">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-1">
-                          <h4 className="font-semibold">{pattern.name}</h4>
-                          <Badge variant="secondary">{pattern.bpm} BPM</Badge>
-                          <Badge variant="outline">
-                            <Grid3X3 className="mr-1 h-3 w-3" />
-                            {formatPattern(pattern.pattern)}
-                          </Badge>
-                        </div>
-                        {pattern.description && (
-                          <p className="text-sm text-muted-foreground mb-2">
-                            {pattern.description}
-                          </p>
-                        )}
-                        <p className="text-xs text-muted-foreground">
-                          Created: {new Date(pattern.createdAt).toLocaleString()}
+            <div className="space-y-3">
+              {patterns.map((pattern) => (
+                <Card key={pattern.id} className="p-3">
+                  <div className="flex justify-between items-start">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <h4 className="font-semibold">{pattern.name}</h4>
+                        <Badge variant="secondary">{pattern.bpm} BPM</Badge>
+                        <Badge variant="outline">
+                          <Grid3X3 className="mr-1 h-3 w-3" />
+                          {formatPattern(pattern.pattern)}
+                        </Badge>
+                      </div>
+                      {pattern.description && (
+                        <p className="text-sm text-muted-foreground mb-2">
+                          {pattern.description}
                         </p>
-                      </div>
-                      <div className="flex gap-1">
-                        <Button
-                          size="sm"
-                          onClick={() => onLoadPattern(pattern)}
-                        >
-                          <Download className="h-3 w-3 mr-1" />
-                          Load
-                        </Button>
-                        {currentPatternId === pattern.id && (
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => overwritePattern(pattern.id)}
-                            disabled={isOverwriting === pattern.id}
-                          >
-                            {isOverwriting === pattern.id ? (
-                              <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                            ) : (
-                              <Save className="h-3 w-3 mr-1" />
-                            )}
-                            Overwrite
-                          </Button>
-                        )}
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => deletePattern(pattern.id)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
+                      )}
+                      <p className="text-xs text-muted-foreground">
+                        Created: {new Date(pattern.createdAt).toLocaleString()}
+                      </p>
                     </div>
-                  </Card>
-                ))}
-              </div>
-            </ScrollArea>
+                    <div className="flex gap-1">
+                      <Button
+                        size="sm"
+                        onClick={() => onLoadPattern(pattern)}
+                      >
+                        <Download className="h-3 w-3 mr-1" />
+                        Load
+                      </Button>
+                      {currentPatternId === pattern.id && (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => overwritePattern(pattern.id)}
+                          disabled={isOverwriting === pattern.id}
+                        >
+                          {isOverwriting === pattern.id ? (
+                            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                          ) : (
+                            <Save className="h-3 w-3 mr-1" />
+                          )}
+                          Overwrite
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => deletePattern(pattern.id)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
           </CardContent>
         </Card>
       )}

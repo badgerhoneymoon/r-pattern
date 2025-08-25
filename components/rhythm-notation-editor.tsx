@@ -21,6 +21,7 @@ export function RhythmNotationEditor() {
   const [draggedBar, setDraggedBar] = useState<number | null>(null)
   const [currentPatternId, setCurrentPatternId] = useState<string | null>(null)
   const [currentPatternName, setCurrentPatternName] = useState<string | null>(null)
+  const [originalPatternName, setOriginalPatternName] = useState<string | null>(null)
   
   const audioContextRef = useRef<AudioContext | null>(null)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
@@ -64,8 +65,10 @@ export function RhythmNotationEditor() {
       })
     }
     
-    // Clear pattern name when making changes (but keep ID for overwrite functionality)
-    setCurrentPatternName(null)
+    // Mark pattern as modified when making changes
+    if (originalPatternName) {
+      setCurrentPatternName(`${originalPatternName} (modified)`)
+    }
   }
 
   const changeNoteType = (index: number, newType: NoteDuration) => {
@@ -90,8 +93,10 @@ export function RhythmNotationEditor() {
       })
     }
     
-    // Clear pattern name when making changes (but keep ID for overwrite functionality)
-    setCurrentPatternName(null)
+    // Mark pattern as modified when making changes
+    if (originalPatternName) {
+      setCurrentPatternName(`${originalPatternName} (modified)`)
+    }
   }
 
   const clearPattern = () => {
@@ -100,6 +105,7 @@ export function RhythmNotationEditor() {
     setNoteTypes(new Array(size).fill('16th'))
     setCurrentPatternId(null)
     setCurrentPatternName(null)
+    setOriginalPatternName(null)
     stopPlayback()
   }
 
@@ -166,6 +172,7 @@ export function RhythmNotationEditor() {
     setBpm(savedPattern.bpm)
     setCurrentPatternId(savedPattern.id)
     setCurrentPatternName(savedPattern.name)
+    setOriginalPatternName(savedPattern.name)
     
     // Auto-switch to 4-bar mode if pattern has more than 32 cells
     if (savedPattern.pattern.length > 32) {
@@ -542,7 +549,7 @@ export function RhythmNotationEditor() {
     <div className="container mx-auto p-6 max-w-6xl">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-3xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">
-          Grid{currentPatternId && !currentPatternName ? ` - Modified Pattern` : currentPatternName ? ` - ${currentPatternName}` : ''}
+          Grid{currentPatternName ? ` - ${currentPatternName}` : ''}
         </h1>
         <Link href="/">
           <Button variant="outline" size="sm">
@@ -827,8 +834,9 @@ export function RhythmNotationEditor() {
           currentBPM={bpm}
           onLoadPattern={loadPattern}
           currentPatternId={currentPatternId}
-          onPatternOverwritten={() => {
-            // Pattern was overwritten, no need to change the current pattern info
+          onPatternOverwritten={(originalName) => {
+            // Restore the original pattern name after overwriting
+            setCurrentPatternName(originalName)
           }}
         />
       </div>
