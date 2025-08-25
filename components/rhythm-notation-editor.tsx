@@ -385,44 +385,20 @@ export function RhythmNotationEditor() {
               <div className="flex px-2">
                 {(() => {
                   const indicators = []
-                  let skipNext = 0
                   
                   for (let i = 0; i < 32; i++) {
                     const index = startIndex + i
-                    
-                    if (skipNext > 0) {
-                      skipNext--
-                      continue
-                    }
-                    
-                    const noteType = noteTypes[index]
                     const sixteenth = index % 4
-                    
-                    let cellSpan = 1
-                    let label = ""
-                    
                     const beatNumber = Math.floor((index % 16) / 4) + 1
                     
-                    if (noteType === '16th') {
-                      cellSpan = 1
-                      label = sixteenth === 0 ? beatNumber.toString() : sixteenth === 1 ? "e" : sixteenth === 2 ? "&" : "a"
-                    } else if (noteType === '8th') {
-                      cellSpan = 2
-                      skipNext = 1
-                      label = sixteenth === 0 ? beatNumber.toString() : sixteenth === 2 ? "&" : (sixteenth === 1 ? "e" : "a")
-                    } else if (noteType === 'quarter') {
-                      cellSpan = 4
-                      skipNext = 3
-                      label = beatNumber.toString()
-                    }
-                    
-                    const cellWidth = cellSpan * 30
+                    // Always show label for each position
+                    let label = sixteenth === 0 ? beatNumber.toString() : sixteenth === 1 ? "e" : sixteenth === 2 ? "&" : "a"
                     
                     indicators.push(
                       <div 
                         key={index} 
-                        className={`text-xs text-gray-500 ${noteType === '16th' ? 'text-center' : 'text-left pl-1'} ${['1', '2', '3', '4'].includes(label) ? 'font-bold' : ''}`} 
-                        style={{ width: `${cellWidth}px` }}
+                        className={`text-xs text-gray-500 text-center ${['1', '2', '3', '4'].includes(label) ? 'font-bold' : ''}`} 
+                        style={{ width: '30px' }}
                       >
                         {label}
                       </div>
@@ -629,52 +605,27 @@ export function RhythmNotationEditor() {
               <div className="flex px-2">
                 {(() => {
                   const indicators = []
-                  let skipNext = 0
                   
                   for (let index = 0; index < 32; index++) {
-                  if (skipNext > 0) {
-                    skipNext--
-                    continue
+                    const sixteenth = index % 4
+                    const beatNumber = Math.floor((index % 16) / 4) + 1
+                    
+                    // Always show label for each position
+                    let label = sixteenth === 0 ? beatNumber.toString() : sixteenth === 1 ? "e" : sixteenth === 2 ? "&" : "a"
+                    
+                    indicators.push(
+                      <div 
+                        key={index} 
+                        className={`text-xs text-gray-500 text-center ${['1', '2', '3', '4'].includes(label) ? 'font-bold' : ''}`} 
+                        style={{ width: '30px' }}
+                      >
+                        {label}
+                      </div>
+                    )
                   }
                   
-                  const noteType = noteTypes[index]
-                  const sixteenth = index % 4
-                  
-                  let cellSpan = 1
-                  let label = ""
-                  
-                  const beatNumber = Math.floor((index % 16) / 4) + 1 // 1, 2, 3, 4
-                  
-                  if (noteType === '16th') {
-                    cellSpan = 1
-                    label = sixteenth === 0 ? beatNumber.toString() : sixteenth === 1 ? "e" : sixteenth === 2 ? "&" : "a"
-                  } else if (noteType === '8th') {
-                    cellSpan = 2
-                    skipNext = 1
-                    // For 8th notes, show the starting subdivision
-                    label = sixteenth === 0 ? beatNumber.toString() : sixteenth === 2 ? "&" : (sixteenth === 1 ? "e" : "a")
-                  } else if (noteType === 'quarter') {
-                    cellSpan = 4
-                    skipNext = 3
-                    // For quarter notes, only show beat numbers
-                    label = beatNumber.toString()
-                  }
-                  
-                  const cellWidth = cellSpan * 30
-                  
-                  indicators.push(
-                    <div 
-                      key={index} 
-                      className={`text-xs text-gray-500 ${noteType === '16th' ? 'text-center' : 'text-left pl-1'} ${['1', '2', '3', '4'].includes(label) ? 'font-bold' : ''}`} 
-                      style={{ width: `${cellWidth}px` }}
-                    >
-                      {label}
-                    </div>
-                  )
-                }
-                
-                return indicators
-              })()}
+                  return indicators
+                })()}
             </div>
           </div>
           )}
